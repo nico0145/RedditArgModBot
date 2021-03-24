@@ -3,6 +3,8 @@ import os
 import sqlite3 as sl
 import discord
 import praw
+import sys
+import asyncio
 from prawcore.exceptions import OAuthException, ResponseException
 from dotenv import load_dotenv
 from Reddit import get_reddit_object
@@ -57,8 +59,15 @@ async def on_message(message):
                     Response = ResolveAction(con, message.content, SenderAction['status'], reddit)
         con.commit()
         if Response is not None:
+            Msgs = []
             for indRes in Sectionize(Response):
-                await message.channel.send(indRes)
+                Msgs.append(await message.channel.send(indRes))
+            seconds = int(GetSetting(con,"DelMsgAfterSeconds"))
+            if seconds > 0:
+                await asyncio.sleep(seconds)
+                for Msg in Msgs:
+                    await Msg.delete()
+
     if message.content == 'raise-exception':
         raise discord.DiscordException
 def Sectionize(sIn):
@@ -81,7 +90,7 @@ def Sectionize(sIn):
                     sRet = chunk + "\n--------------------\n"
             else:
                 sRet = sRet + chunk + "\n--------------------\n"
-    retChunks.append(sRet)
+    retChunks.append(sRet.rstrip("\n--------------------\n"))
     return retChunks
 def SanatizeRedditLink(sIn,con):
     sIn = sIn.lstrip('http')
@@ -112,35 +121,24 @@ def HandleReasons(con,sCommand):
 def EditReason(con, sCommand):
     sCommand = sCommand.replace("\,","[Coma]")
     sParams = sCommand.split(',')
-    if len(sParams) >= 2:
-        if (len(sParams[0].strip(' ')) == 0 or check_int(sParams[0].strip(' '))) and len(sParams[1].strip(' ')) > 0:
+    if len(sParams) == 3:
+        if (len(sParams[0].strip(' ')) == 0 or check_int(sParams[0].strip(' '))) and len(sParams[1].strip(' ')) > 0 and check_int(sParams[2].strip(' ')):
             sId = sParams[0].strip(' ')
             sDescription = sParams[1].replace("[Coma]",",")
-            if len(sParams) == 2:
-                row = (sDescription,None,None)
-            elif len(sParams) == 4:
-                banDays = sParams[2].strip(' ')
-                sMessage = sParams[3].replace("[Coma]",",")
-                if banDays == "0" or banDays == "":
-                    banDays = None
-                    sMessage = None
-                elif len(sMessage) == 0:
-                    return "Formato incorrecto, se intento agregar un motivo con dias de Ban pero sin Mod Mail"
-                row = (sDescription,banDays,sMessage)
-            else:
-                return f"Formato incorrecto, por favor asegurate de que todos los campos esten completados correctamente:\n<id(entero, si esta vacio es un nuevo registro)>,<Descripcion(texto, obligatorio)>,<BanDays(entero, si es -1 es permanente)>,<Message(Texto)>\n\nReferencias a tener en cuenta al confeccionar el Mod Mail:\n[Sub] -> Nombre del subreddit a moderar\n[Link] -> Link sancionado\n[ActionTypeDesc] -> Por que fue sancionado el link\n[Details] -> Notas del moderador\n\\n -> Nueva linea\nPara insertar comas [,] en los campos de texto usar el caracter de escape \\\,"
+            Weight = sParams[2].strip(' ')
+            row = (sDescription,Weight)
             if len(sId) == 0: #Agregar Motivo
-                con.execute(f"""INSERT INTO ActionType ([Description], [BanDays], Message) VALUES (?,?,?);""",row)
+                con.execute(f"""INSERT INTO ActionType ([Description], [Weight], Active) VALUES (?,?,1);""",row)
                 return "Motivo agregado"
             else: # Editar Motivo
                 cur = con.cursor()
-                cur.execute(f"SELECT * FROM ActionType where Id = {sId}")
+                cur.execute(f"SELECT * FROM ActionType where Id = {sId} and Active = 1")
                 rows = cur.fetchall()
                 if len(rows) > 0:
-                    con.execute(f"Update ActionType set [Description] = ?, [BanDays] = ?, Message = ? WHERE Id = {sId}", row)
+                    con.execute(f"Update ActionType set [Description] = ?, [Weight] = ? WHERE Id = {sId}", row)
                     return f"Motivo #{sId} actualizado."
                 return f"Motivo #{sId} no encontrado."
-    return f"Formato incorrecto, por favor asegurate de que todos los campos esten completados correctamente:\n<id(entero, si esta vacio es un nuevo registro)>,<Descripcion(texto, obligatorio)>,<BanDays(entero, si es -1 es permanente)>,<Message(Texto)>\n\nReferencias a tener en cuenta al confeccionar el Mod Mail:\n[Sub] -> Nombre del subreddit a moderar\n[Link] -> Link sancionado\n[ActionTypeDesc] -> Por que fue sancionado el link\n[Details] -> Notas del moderador\n\\n -> Nueva linea\nPara insertar comas [,] en los campos de texto usar el caracter de escape \\\,"
+    return f"Formato incorrecto, por favor asegurate de que todos los campos esten completados correctamente:\n<id(entero, si esta vacio es un nuevo registro)>,<Descripcion(texto)>,<Peso(entero)>\nPara insertar comas [,] en los campos de texto usar el caracter de escape \\\,"
 
 def RemoveReason(con,sId):
     if not check_int(sId):
@@ -150,24 +148,16 @@ def RemoveReason(con,sId):
     cur.execute(f"SELECT * FROM ActionType where Id = {iId}")
     rows = cur.fetchall()
     if len(rows) > 0:
-        con.execute(f"DELETE FROM ActionType WHERE Id = {iId}")
+        con.execute(f"Update ActionType set Active = 0 WHERE Id = {iId}")
         return f"Motivo #{iId} eliminado."
     return f"Motivo #{iId} no encontrado."
 def GetReasons(con):
     cur = con.cursor()
-    cur.execute(f"SELECT * FROM ActionType")
+    cur.execute(f"SELECT * FROM ActionType where Active = 1")
     rows = cur.fetchall()
     sRetu = ""
     for row in rows:
-        sRetu = sRetu + f"Id: {row[0]}\nDescription: {row[1]}"
-        if row[2] is not None and row[2] != 0:
-            sRetu = sRetu + "\nBan: "
-            if row[2] < 1:
-                sRetu = sRetu + "Permanente"
-            else:
-                sRetu = sRetu + f"{row[2]} Dias"
-            sRetu = sRetu + f"\nMod Mail: {row[3]}"
-        sRetu = sRetu + "\n--------------------\n"
+        sRetu = sRetu + f"Id: {row[0]}\nDescription: {row[1]}\nPeso: {row[2]}\n--------------------\n"
     return sRetu
 def HandlePolicies(con,sCommand):
     if sCommand.lower().startswith('list'):
@@ -202,7 +192,7 @@ def EditPol(con, sCommand):
                     con.execute(f"Update Policies set [From] = ?, [To] = ?, Action = ?, BanDays = ?, Message = ? WHERE Id = {sParams[0].strip(' ')}", row)
                     return f"Politica #{sParams[0].strip(' ')} actualizada."
                 return f"Politica #{sParams[0].strip(' ')} no encontrada."
-    return "Formato incorrecto, por favor asegurate de que todos los campos esten completados correctamente:\n<id(entero, si esta vacio es un nuevo registro)>,<From(entero)>,<To(entero)>,<Action(warn/ban)>,<BanDays(entero, si esta vacio es permanente)>,<Message(modmail)>\n\nReferencias a tener en cuenta al confeccionar el Mod Mail:\n[Sub] -> Nombre del subreddit a moderar\n[Link] -> Link sancionado\n[ActionTypeDesc] -> Por que fue sancionado el link\n[Details] -> Notas del moderador\n\\n -> Nueva linea"
+    return "Formato incorrecto, por favor asegurate de que todos los campos esten completados correctamente:\n<id(entero, si esta vacio es un nuevo registro)>,<From(entero)>,<To(entero)>,<Action(warn/ban)>,<BanDays(entero, si esta vacio es permanente)>,<Message(modmail)>\n\nReferencias a tener en cuenta al confeccionar el Mod Mail:\n[Sub] -> Nombre del subreddit a moderar\n[Link] -> Link sancionado\n[ActionTypeDesc] -> Por que fue sancionado el link\n[Details] -> Notas del moderador\n[Summary] -> Resumen de faltas\n\\n -> Nueva linea"
 
 def RemovePol(con,sId):
     if not check_int(sId):
@@ -285,15 +275,17 @@ def GetSetting(con,setting):
     return rows[0][0]
 
 def check_int(s):
-    if len(s) > 0 and s[0] in ('-', '+'):
-        return s[1:].isdigit()
-    return s.isdigit()
+    if s is not None and len(str(s)) > 0:
+        if str(s)[0] in ('-', '+'):
+            return str(s)[1:].isdigit()
+        return str(s).isdigit()
+    return 0
 
 def AddMod(con, sCommand):
     sParams = sCommand.split(',')
     if len(sParams) == 3:
-        if sParams[2].isnumeric() and len(sParams[0].strip(' ')) > 0 and len(sParams[1].strip(' ')) > 0:
-            row = (sParams[0],sParams[1],sParams[2])
+        if sParams[2].strip(' ').isnumeric() and len(sParams[0].strip(' ')) > 0 and len(sParams[1].strip(' ')) > 0:
+            row = (sParams[0].strip(' '),sParams[1].strip(' '),sParams[2].strip(' '))
             con.execute(f"""INSERT INTO Moderators (Name, RedditName, DiscordID) VALUES (?,?,?);""",row)
             return f"{sParams[0]} fue agregado a la lista de moderadores"
     return "Formato incorrecto, por favor asegurate de que todos los campos esten completados correctamente:\n<nombre>,<nombre en reddit>,<ID de discord (numerico)>"
@@ -343,12 +335,31 @@ def Unwarn(con,sId):
 def GetWarns(con,sUser):
     rows = GetActionDetail(con, '', 0,sUser)
     sRetu = ''
+    dateFrom = datetime.now() - timedelta(days=int(GetSetting(con,"warnexpires")))
+    iWeight = 0
     for row in rows:
-        sRetu = sRetu + f"Warn Id: {row['Id']} \nMod: {row['ModName']} \nFecha: {row['Date']} \nLink: {row['Link']}\nMotivo: {row['TypeDesc']}\nDetalles: {row['Details']}\n--------------------\n"
+        if datetime.strptime(row['Date'], '%Y-%m-%d %H:%M:%S.%f') >= dateFrom:
+            sActive = "Si"
+            iWeight = iWeight + row['Weight']
+        else:
+            sActive = "No"
+        sRetu = sRetu + f"Warn Id: {row['Id']} \nMod: {row['ModName']} \nFecha: {row['Date']}\nActivo: {sActive}\nLink: {row['Link']}\nMotivo: {row['TypeDesc']}\nPuntos: {row['Weight']}\nDetalles: {row['Details']}\n--------------------\n"
     if len(sRetu) == 0:
         sRetu = f"No se encontaron warns para el usuario {sUser}"
+    else:
+        sRetu = sRetu + f"Total: {iWeight} Puntos"
     return sRetu
-
+def GetWarnsUserReport(con,sUser):
+    rows = GetActionDetail(con, '', 0,sUser)
+    sRetu = ""
+    dateFrom = datetime.now() - timedelta(days=int(GetSetting(con,"warnexpires")))
+    iWeight = 0
+    for row in rows:
+        if datetime.strptime(row['Date'], '%Y-%m-%d %H:%M:%S.%f') >= dateFrom:
+            sRetu = sRetu + f"{row['Date'].split(' ')[0]}\t[{row['TypeDesc']}](https://{row['Link']})\tPuntos: {row['Weight']}\n\n"
+            iWeight += row['Weight']
+    sRetu = sRetu + f"**Total**: {iWeight}"
+    return sRetu
 def CheckSender(con, author):
 
     cur = con.cursor()
@@ -364,17 +375,23 @@ def CheckSender(con, author):
     else:
         return {'modID': modId, 'status': rows[0][0]} # Pending resolution
 
-def GetActionTypes(con):
-    data = con.execute("SELECT * FROM ActionType")
+def GetActionTypes(con, UserName):
+
     sRetu = ""
-    for row in data:
-        sRetu = f"{sRetu} {row[0]} - {row[1]}"
-        if row[2] is not None and row[2] != 0:
-            sRetu = sRetu + " - Ban: "
-            if row[2] < 1:
+    Weight = GetUsersCurrentWeight(con,UserName)
+    cur = con.cursor()
+    cur.execute(f"SELECT t.Id, t.Description, p.Action, p.BanDays FROM ActionType t join Policies p on p.[From] <= t.Weight + {Weight} and p.[To] >= t.Weight + {Weight} Where t.Active = 1 order by t.Id")
+    rows = cur.fetchall()
+    for row in rows:
+        sRetu = f"{sRetu}#{row[0]} - {row[1]} - **Action:** "
+        if row[2] == 1:
+            sRetu = sRetu + "Advertencia"
+        else:
+            sRetu = sRetu + "Ban "
+            if row[3] < 1:
                 sRetu = sRetu + "Permanente"
             else:
-                sRetu = sRetu + f"{row[2]} Dias"
+                sRetu = sRetu + f"{row[3]} Dias"
         sRetu = sRetu + "\n"
     return sRetu
 
@@ -383,57 +400,59 @@ def DeletePending(con, Id):
 
 def ValidateActionType(con, Id):
     cur = con.cursor()
-    cur.execute(f"SELECT Id FROM ActionType WHERE Id = {Id}")
+    cur.execute(f"SELECT Weight FROM ActionType WHERE Id = {Id} and Active = 1")
     rows = cur.fetchall()
-    return len(rows) > 0
-
-def GetActionTypeDetails(con, Id):
-    cur = con.cursor()
-    cur.execute(f"SELECT BanDays, Message FROM ActionType WHERE Id = {Id}")
-    rows = cur.fetchall()
-    return  {'BanDays': rows[0][0], 'Message': rows[0][1]}
-
+    if len(rows) > 0:
+        return int(rows[0][0])
+    return 0
 def SanatizeInput(sIn):
-    sOut = sIn.split('-')
+    sOut = sIn.split(',')
     sDesc = ''
     if len(sOut) > 1:
-        sDesc = sIn[len(sOut[0]):].strip('-').strip(' ')
-    sId = sOut[0].strip('-').strip(' ')
-    if(sId.isnumeric()):
-        return {'Id': sId,'Description' : sDesc}
-    else:
-        return {'Id': '0','Description' : sDesc}
-
-def GetApplyingPolicy(con, ActionId):
+        sDesc = sIn[len(sOut[0]):].strip(',').strip(' ')
+    sId = sOut[0].strip(',').strip(' ')
+    if sId.startswith('#'):
+        sId = sId[1:]
+        if(sId.isnumeric()):
+            return {'Id': sId,'Description' : sDesc}
+    return {'Id': '0','Description' : sDesc}
+def GetUsersCurrentWeight(con, sUser):
+    dateFrom = datetime.now() - timedelta(days=int(GetSetting(con,"warnexpires")))
+    cur = con.cursor()
+    cur.execute(f"Select Sum(t.Weight) FROM Actions a Join ActionType t on t.Id = a.ActionType WHERE a.User = '{sUser}' and a.Date >= '{dateFrom}'")
+    rows = cur.fetchall()
+    if(len(rows)) > 0 and check_int(rows[0][0]):
+        return int(rows[0][0])
+    return 0
+def GetApplyingPolicy(con, ActionId, AddedWeight):
     cur = con.cursor()
     cur.execute(f"Select User FROM Actions WHERE Id = {ActionId}")
     rows = cur.fetchall()
     if len(rows) > 0:
-        dateFrom = datetime.now() - timedelta(days=int(GetSetting(con,"warnexpires")))
-        cur.execute(f"Select Count(1) FROM Actions WHERE User = '{rows[0][0]}' and Date >= '{dateFrom}'")
-        rows = cur.fetchall()
-        cur.execute(f"Select Action, BanDays, Message FROM Policies WHERE [From] <= {rows[0][0]} and [To] >= {rows[0][0]}")
+        Weight = GetUsersCurrentWeight(con, rows[0][0]) + AddedWeight
+        cur.execute(f"Select Action, BanDays, Message FROM Policies WHERE [From] <= {Weight} and [To] >= {Weight}")
         rows = cur.fetchall()
         if len(rows) > 0:
             return {'Action':rows[0][0], 'BanDays': rows[0][1], 'Message':rows[0][2]}
     return  {'Action':'0', 'BanDays': '0', 'Message':'0'}
 
-def CreateModMail(sMessage, Link, ActionDesc, Details, con):
+def CreateModMail(sMessage, Link, ActionDesc, Details, sUser, con):
     sMessage = sMessage.replace("[Sub]", GetSetting(con,"subreddit"))
     sMessage = sMessage.replace("[Link]", f"https://{Link}")
     sMessage = sMessage.replace("[ActionTypeDesc]", ActionDesc)
     sMessage = sMessage.replace("[Details]", Details.replace("\n",">\n"))
+    if "[Summary]" in sMessage:
+        sMessage = sMessage.replace("[Summary]", GetWarnsUserReport(con,sUser))
     sMessage = sMessage.replace("\\n", "\n")
-    return sMessage
+    return sMessage[:1000]
 
 def ResolveAction(con, sIn, ActionId, reddit):
+    if not sIn.startswith('#'):
+        return None
     Input = SanatizeInput(sIn)
-    if ValidateActionType(con, Input['Id']):
-        ActionTypeSanction = GetActionTypeDetails(con, Input['Id'])
-        if ActionTypeSanction['BanDays'] is not None:
-            preparedAction = PrepareAction(reddit,con,Input['Id'],Input['Description'],ActionId,ActionTypeSanction['Message'])
-            return BanUser(reddit,GetSetting(con,"subreddit"),ActionTypeSanction['BanDays'],preparedAction["ActionDetailRow"], preparedAction["ModMail"])
-        ApplyingPol = GetApplyingPolicy(con,ActionId)
+    Weight = ValidateActionType(con, Input['Id'])
+    if Weight > 0:
+        ApplyingPol = GetApplyingPolicy(con,ActionId, Weight)
         if ApplyingPol['Action'] > 0:
             preparedAction = PrepareAction(reddit,con,Input['Id'],Input['Description'],ActionId,ApplyingPol['Message'])
             ActionDetailRow = preparedAction["ActionDetailRow"]
@@ -442,7 +461,7 @@ def ResolveAction(con, sIn, ActionId, reddit):
             if ApplyingPol['Action'] == 1: #Warn
                 reddit.redditor(ActionDetailRow['User']).message(f"Equipo de Moderacion de /r/{sSubReddit}",modmail, from_subreddit=sSubReddit)
             if ApplyingPol['Action'] == 2: #Ban
-                return BanUser(reddit,sSubReddit,ApplyingPol['BanDays'],ActionDetailRow, modmail)
+                return BanUser(reddit,sSubReddit,ApplyingPol['BanDays'],ActionDetailRow, modmail, ActionId,con)
             return "Usuario advertido."
             #Aca va la parte en donde vemos que hacemos con las politicas
         return "Error al buscar politica"
@@ -452,7 +471,7 @@ def PrepareAction(reddit, con, InputId, InputDesc, ActionId, Message):
     con.execute(f"UPDATE Actions SET ActionType = {InputId}, Description = '{InputDesc}' WHERE Id = {ActionId};")
     ActionDetailRows = GetActionDetail(con, '', ActionId,'')
     ActionDetailRow = ActionDetailRows[0]
-    modmail = CreateModMail(Message, ActionDetailRow['Link'],ActionDetailRow['TypeDesc'],ActionDetailRow['Details'],con)
+    modmail = CreateModMail(Message, ActionDetailRow['Link'],ActionDetailRow['TypeDesc'],ActionDetailRow['Details'],ActionDetailRow['User'],con)
     LinkType = GetLinkType(f"https://{ActionDetailRow['Link']}",con)
     if LinkType == 1:
         praw.models.Submission(reddit,url = f"https://{ActionDetailRow['Link']}").mod.remove()
@@ -460,16 +479,20 @@ def PrepareAction(reddit, con, InputId, InputDesc, ActionId, Message):
         praw.models.Comment(reddit,url = f"https://{ActionDetailRow['Link']}").mod.remove()
     return {'ActionDetailRow': ActionDetailRow, 'ModMail': modmail}
 
-def BanUser(reddit,sSubReddit,BanDays,ActionDetailRow, modmail):
+def BanUser(reddit,sSubReddit,BanDays,ActionDetailRow, modmail, ActionId,con):
     sub = reddit.subreddit(sSubReddit)
-    if int(BanDays) > 0:
-        sub.banned.add(ActionDetailRow['User'],ban_reason=ActionDetailRow['TypeDesc'], duration=int(BanDays), ban_message=modmail)
-        return f"Usuario banneado por {BanDays} dias."
-    sub.banned.add(ActionDetailRow['User'],ban_reason=ActionDetailRow['TypeDesc'], ban_message=modmail)
-    return f"Usuario banneado permanentemente."
-
+    try:
+        if int(BanDays) > 0:
+            sub.banned.add(ActionDetailRow['User'],ban_reason=ActionDetailRow['TypeDesc'], duration=int(BanDays), ban_message=modmail)
+            return f"Usuario banneado por {BanDays} dias."
+        sub.banned.add(ActionDetailRow['User'],ban_reason=ActionDetailRow['TypeDesc'], ban_message=modmail)
+        return f"Usuario banneado permanentemente."
+    except: 
+        #unwarn ActionId rollback
+        Unwarn(con,f"{ActionId}")
+        return f"Ocurrio un error al intentar bannear al usuario: {sys.exc_info()[1]}"
 def GetActionDetail(con, Link, ActionId, User):
-    sQuery = f"SELECT ifnull(m.RedditName,'Deleted Mod Id ' + a.Mod), ifnull(t.Description,'Deleted Reason Id ' + a.ActionType), a.Description, a.Date, a.Link, a.User, a.Id FROM Actions a left join Moderators m on m.Id = a.Mod left join ActionType t on t.Id = a.ActionType "
+    sQuery = f"SELECT ifnull(m.RedditName,'Deleted Mod Id ' + a.Mod), ifnull(t.Description,'Deleted Reason Id ' + a.ActionType), a.Description, a.Date, a.Link, a.User, a.Id, t.Weight FROM Actions a left join Moderators m on m.Id = a.Mod left join ActionType t on t.Id = a.ActionType "
     cur = con.cursor()
     if ActionId > 0:
         sQuery = sQuery + f"WHERE a.Id = '{ActionId}'"
@@ -481,7 +504,7 @@ def GetActionDetail(con, Link, ActionId, User):
     rows = cur.fetchall()
     lst = []
     for row in rows:
-        lst.append({'ModName':row[0], 'TypeDesc': row[1], 'Details':row[2], 'Date':row[3], 'Link':row[4], 'User':row[5], 'Id': row[6]})
+        lst.append({'ModName':row[0], 'TypeDesc': row[1], 'Details':row[2], 'Date':row[3], 'Link':row[4], 'User':row[5], 'Id': row[6], 'Weight': row[7], })
     return lst
 
 def InitAction(Link, con, reddit, SenderAction):
@@ -499,6 +522,6 @@ def InitAction(Link, con, reddit, SenderAction):
                 AuthorName = comment.author.name  # This returns a ``Redditor`` object.
             row = (AuthorName, SanatizeRedditLink(Link,con), SenderAction['modID'],datetime.now() )
             con.execute("""INSERT INTO Actions (User, Link, Mod, Date) VALUES (?,?,?,?);""", row)
-            return f"Selecciona un motivo (# - Descripcion <Opcional>) \n{GetActionTypes(con)}"
+            return f"Selecciona un motivo #<Id>, <Descripcion (Opcional)> \n{GetActionTypes(con,AuthorName)}"
     return None
 client.run(TOKEN)
