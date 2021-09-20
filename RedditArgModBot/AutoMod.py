@@ -9,6 +9,8 @@ from datetime import datetime
 import logging
 import asyncpraw
 import opengraph_py3
+import urllib.request
+from bs4 import BeautifulSoup
 
 class bcolors:
     HEADER = '\033[95m'
@@ -108,7 +110,6 @@ async def AutoModComments(reddit,con):
         await AnalyzeSubmitter(con, subreddit, submission,"comment")
 async def AutoModPosts(reddit,con):
     subreddit = await reddit.subreddit(GetSetting(con,"subreddit"))
-    #subreddit = await reddit.subreddit("GenteSexyRadio") #Para debug
     async for submission in subreddit.stream.submissions(skip_existing=True):
         await AnalyzeSubmitter(con, subreddit, submission,"post")
 async def ModLog(reddit,con):
@@ -168,11 +169,19 @@ async def AnalyzeSubmitter(con, subreddit, submission, type):
 
 async def URLTitle(subreddit, submission):
     if submission.is_reddit_media_domain == False and submission.is_self == False:
-        website = opengraph_py3.OpenGraph(url = submission.url)
-        if website.is_valid():
-            if website['title'].lower().strip(' ') != submission.title.lower().strip(' '):
-                await submission.report(f"Revisar editorializacion en el titulo")
-                Log(f"Post title: \'{submission.title}\' doesn't match website's: \'{website['title']}\' User: {submission.author.name} the post was reported to the modqueue", bcolors.WARNING,logging.INFO)
+        if GetWebsiteTitle(submission.url).lower().strip(' ') != submission.title.lower().strip(' '):
+            await submission.report(f"Revisar editorializacion en el titulo")
+            Log(f"Post title: \'{submission.title}\' doesn't match website's: \'{website['title']}\' User: {submission.author.name} the post was reported to the modqueue", bcolors.WARNING,logging.INFO)
+        else:
+            Log(f"Post title for user {submission.author.name} match the website's",bcolors.WARNING,logging.DEBUG)
+def GetWebsiteTitle(URL):
+    with urllib.request.urlopen(URL) as response:
+        webpage = response.read()
+        soup = BeautifulSoup(webpage, "lxml")
+        title = soup.find("meta", property="og:title")
+        if title is None:
+            title = soup.title.string
+    return title["content"] if title else ""
 
 async def OneHourBetweenPosts(subreddit, submission):
     end_date = submission.created_utc - 1*60*60
@@ -180,7 +189,7 @@ async def OneHourBetweenPosts(subreddit, submission):
         if oldsubmission.created_utc < end_date:
             break
         if oldsubmission.subreddit.display_name.lower() == subreddit.display_name.lower() and oldsubmission != submission:
-            TimeLeft = time.strftime("%M:%S", time.gmtime(ewnd_date - oldsubmission.created_utc))
+            TimeLeft = time.strftime("%M:%S", time.gmtime(end_date - oldsubmission.created_utc))
             Log(f"Less than an hour ({TimeLeft}) between posts for User {submission.author.name} the post was reported to the modqueue",bcolors.WARNING,logging.INFO)
             await submission.report(f"Dejar pasar una hora entre posts (Tiempo entre posteos: {TimeLeft})")
 
