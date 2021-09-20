@@ -68,25 +68,26 @@ async def on_message(message):
     if message.author == client.user:
         return
     SenderAction = CheckSender(con,message.author)
-    if SenderAction['modID'] != '0':
-        if message.content.lower().strip(' ')=="gary":
+    if SenderAction['modID'] != '0': 
+        StandardMessage = message.content.lower()
+        if StandardMessage.strip(' ')=="gary":
             Response = "gary - Muestra esta ayuda\nwarns <user> - Muestra los warns de un usuario\nunwarn <id> - Elimina un warn especifico\nunban <user> - desbannea a un usuario\nmods - funciones de moderador\nsettings - configura las preferencias\npolicies - configura las politicas de moderacion\nreasons - configura los motivos de sancion\nstats - Muestra estadisticas de moderacion\n<link> - inicia el proceso de warn"
-        elif message.content.lower().startswith('warns '):
+        elif StandardMessage.startswith('warns '):
             Response = GetWarns(con,message.content[6:].strip(' '))
-        elif message.content.lower().startswith('unwarn '):
+        elif StandardMessage.startswith('unwarn '):
             Response = Unwarn(con,message.content[7:].strip(' '))
-        elif message.content.lower().startswith('unban '):
+        elif StandardMessage.startswith('unban '):
             Response = Unban(message.content[6:].strip(' '), reddit,con)
-        elif message.content.lower().startswith('mods'):
+        elif StandardMessage.startswith('mods'):
             #MassSanatizeLinks(con) this is here if we need to run a mass sanatization if reddit changes the URL formats or something
             Response = HandleMods(con,message.content[5:].strip(' '))
-        elif message.content.lower().startswith('settings'):
+        elif StandardMessage.startswith('settings'):
             Response = HandleSettings(con,message.content[9:].strip(' '))
-        elif message.content.lower().startswith('policies'):
+        elif StandardMessage.startswith('policies'):
             Response = HandlePolicies(con,message.content[9:].strip(' '))
-        elif message.content.lower().startswith('reasons'):
+        elif StandardMessage.startswith('reasons'):
             Response = HandleReasons(con,message.content[8:].strip(' '))
-        elif message.content.lower().startswith('stats'):
+        elif StandardMessage.startswith('stats'):
             Response = HandleStats(con,message.content[6:].strip(' '))
         else:
             if SenderAction['status'] == '0':
@@ -125,7 +126,12 @@ async def on_message(message):
 
     if message.content == 'raise-exception':
         raise discord.DiscordException
-
+    #def GetModLog(reddit, user):
+    #    target_author
+    #    mod
+    #    action
+    #    target_permalink
+    #    created_utc
 def Sectionize(sIn, sSplit, UseNewLinesForChunks):
     Max = int(os.getenv('DiscordMaxChars'))
     sIn = sIn.strip("\n")
@@ -190,7 +196,7 @@ def SanatizeRedditLinkSub(sIn,subReddit):
     sIn = sIn.lstrip('://')
     sIn = sIn.lstrip('www.')
     sIn = sIn.lstrip('old.') 
-    if sIn.startswith('reddit.com') and subReddit in sIn.lower():
+    if (sIn.startswith('reddit.com') and (subReddit in sIn.lower() or 'message' in sIn.lower())) or sIn.startswith('mod.reddit.com/mail'):
         sIn.rstrip('/')
         chunks = sIn.split("?")
         afterlastslash = 0
@@ -266,7 +272,10 @@ def HandleStats(con,sCommand):
     else:
         return "stats mods - Muestra estadisticas de los moderadores\nstats users - Muestra estadisticas de los usuarios\nstats sub - Muestra estadisticas del subreddit"
 def HandleModStats(con,sCommand):
-    sRetu = "**Estadisticas de Moderadores**\n" + GetTable(con,"select t1.Moderador, t1.Cantidad, t2.Puntos, printf(\"%.2f\", t2.Puntos*1.0 / t1.Cantidad*1.0) as PuntosPorAccion from  (select m.Name as Moderador, count(1) as Cantidad from Actions A join Moderators M on M.Id = A.Mod group by m.Name) t1 join (select m.Name as Moderador, sum(AT.Weight) as Puntos from Actions A join ActionType AT on A.ActionType = AT.Id join Moderators M on M.Id = A.Mod group by m.Name) t2 on t2.Moderador =t1.Moderador order by PuntosPorAccion desc") + "\n\n"
+    if len(sCommand) > 0:
+        sRetu = f"**Estadisticas del mod {sCommand}**\n" + GetTable(con,f"Select at.Description as Motivo, count(1) as Cantidad from Actions A join Moderators M on M.Id = A.Mod join ActionType AT on A.ActionType = AT.Id Where M.Name = '{sCommand}' group by at.Description order by Cantidad desc")
+    else:
+        sRetu = "**Estadisticas de Moderadores**\n" + GetTable(con,"select t1.Moderador, t1.Cantidad, t2.Puntos, printf(\"%.2f\", t2.Puntos*1.0 / t1.Cantidad*1.0) as PuntosPorAccion from  (select m.Name as Moderador, count(1) as Cantidad from Actions A join Moderators M on M.Id = A.Mod group by m.Name) t1 join (select m.Name as Moderador, sum(AT.Weight) as Puntos from Actions A join ActionType AT on A.ActionType = AT.Id join Moderators M on M.Id = A.Mod group by m.Name) t2 on t2.Moderador =t1.Moderador order by PuntosPorAccion desc") + "\n\n"
     return sRetu
         #cantidad de acciones por mod
         #suma de pesos de acciones por mod
@@ -283,6 +292,7 @@ def HandleUserStats(con,sCommand):
     if check_int(sCommand):
         Limite = int(sCommand)
     sRetu = f"**Top {str(Limite)} usuarios con mas acciones**\n" + GetTable(con,f"select User, count(1) as Cantidad from Actions group by User order by Cantidad desc LIMIT {Limite}") + "\n\n"
+    sRetu += f"**Cantidad de usuarios por cantidad de acciones**\n" + GetTable(con,f"Select Cantidad as CantidadDeFaltas, count(User) as Usuarios from (select A.User, count(1) as cantidad from Actions A join ActionType AT on AT.Id = A.ActionType where AT.Weight > 0 group by A.User) as Users group by Cantidad") + "\n\n"
     return sRetu
 def HandleSubStats(con,sCommand):
     sRetu = f"**Modmail**\n" + GetTable(con,f"select a1.Enviados, a2.Respondidos, printf(\"%.2f\",(100.00*a2.Respondidos)/a1.Enviados) as PorcentajeRespondidos from (select count(1) as Enviados,'a' as a from actions where Modmailid is not null) a1 join (select count(1) as Respondidos ,'a' as a from actions where lastmodmailupdated  is not null) a2 on a1.a = a2.a") + "\n"
@@ -389,6 +399,8 @@ def GetLinkType(sIn,con):
     chunks = sIn.split('/')
     if len(chunks) == 0:
         return 0 #invalid link
+    if chunks[0].startswith('mod.reddit.com'):
+        return 3 #Modmail
     if len(chunks) == 6:
         return 1 #link/post
     if len(chunks) == 7:
@@ -462,19 +474,12 @@ def RemoveMod(con,sId):
     if len(rows) > 0:
         if(rows[0][0] == 1):
             return "No podes remover a un administrador"
-        con.execute(f"DELETE FROM Moderators WHERE Id = {iId}")
+        con.execute(f"Update Moderators set Active = false WHERE Id = {iId}")
         return f"Moderador #{iId} eliminado."
     return f"Moderador #{iId} no encontrado."
 
 def GetMods(con):
-    return GetTable(con, "SELECT Id, Name, RedditName, DiscordID FROM Moderators")
-    cur = con.cursor()
-    cur.execute(f"SELECT * FROM Moderators")
-    rows = cur.fetchall()
-    sRetu = ""
-    for row in rows:
-        sRetu = sRetu + f"Mod Id: {row[0]}\nName: {row[1]}\nReddit Name: {row[2]}\nDiscord Id: {row[3]}\n--------------------\n"
-    return sRetu
+    return GetTable(con, "SELECT Id, Name, RedditName, DiscordID, Active FROM Moderators")
 
 def GetSettings(con):
     cur = con.cursor()
@@ -532,7 +537,7 @@ def GetWarnsUserReport(con,sUser, msgLen):
 def CheckSender(con, author):
 
     cur = con.cursor()
-    cur.execute(f"SELECT Id FROM Moderators WHERE DiscordID = {author.id}")
+    cur.execute(f"SELECT Id FROM Moderators WHERE DiscordID = {author.id} and Active = true")
     rows = cur.fetchall()
     if len(rows) <= 0:
         return {'modID': '0', 'status': '0'} #not valid 
@@ -600,16 +605,23 @@ def GetApplyingPolicy(con, ActionId, AddedWeight):
             return {'Action':rows[0][0], 'BanDays': rows[0][1], 'Message':rows[0][2]}
     return  {'Action':'0', 'BanDays': '0', 'Message':'0'}
 
-def CreateModMail(sMessage, Link, ActionDesc, Details, sUser, con):
+def CreateModMail(sMessage, Link, ActionDesc, Details, sUser, con, reddit):
     sMessage = sMessage.replace("[Sub]", GetSetting(con,"subreddit"))
     sMessage = sMessage.replace("[Link]", f"https://{Link}")
     sMessage = sMessage.replace("[ActionTypeDesc]", ActionDesc)
     sMessage = sMessage.replace("[Details]", Details.replace("\n",">\n"))
+    if "[Consultas]" in sMessage:
+        sMessage = sMessage.replace("[Consultas]", GetLastConsultasThread(con,reddit))
     if "[Summary]" in sMessage:
         sMessage = sMessage.replace("[Summary]", GetWarnsUserReport(con,sUser,1000- (len(sMessage) - len("[Summary]"))))
     sMessage = sMessage.replace("\\n", "\n")
     return sMessage[:1000]
-
+def GetLastConsultasThread(con,reddit):
+    List = ""
+    Submissions = reddit.subreddit(GetSetting(con,"subreddit")).search(query='author:AutoModerator AND (title:Consultas OR title:Preguntas)',sort='new',limit=1)
+    for Submission in Submissions:
+        List += Submission.shortlink
+    return List
 def ResolveAction(con, sIn, ActionId, reddit):
     if not sIn.startswith('#'):
         return None
@@ -660,11 +672,11 @@ def PrepareAction(reddit, con, InputId, InputDesc, ActionId, Message):
     con.execute(f"UPDATE Actions SET ActionType = {InputId}, Description = '{InputDesc}' WHERE Id = {ActionId};")
     ActionDetailRows = GetActionDetail(con, '', ActionId,'')
     ActionDetailRow = ActionDetailRows[0]
-    modmail = CreateModMail(Message, ActionDetailRow['Link'],ActionDetailRow['TypeDesc'],ActionDetailRow['Details'],ActionDetailRow['User'],con)
+    modmail = CreateModMail(Message, ActionDetailRow['Link'],ActionDetailRow['TypeDesc'],ActionDetailRow['Details'],ActionDetailRow['User'],con, reddit)
     LinkType = GetLinkType(f"https://{ActionDetailRow['Link']}",con)
     if LinkType == 1:
         praw.models.Submission(reddit,url = f"https://{ActionDetailRow['Link']}").mod.remove()
-    else:
+    elif LinkType == 2:
         praw.models.Comment(reddit,url = f"https://{ActionDetailRow['Link']}").mod.remove()
     return {'ActionDetailRow': ActionDetailRow, 'ModMail': modmail}
 
@@ -681,7 +693,7 @@ def BanUser(reddit,sSubReddit,BanDays,ActionDetailRow, modmail, ActionId,con):
         Unwarn(con,f"{ActionId}")
         return f"Ocurrio un error al intentar bannear al usuario: {sys.exc_info()[1]}"
 def GetActionDetail(con, Link, ActionId, User):
-    sQuery = f"SELECT ifnull(m.RedditName,'Deleted Mod Id ' + a.Mod), ifnull(t.Description,'Deleted Reason Id ' + a.ActionType), a.Description, a.Date, a.Link, a.User, a.Id, t.Weight,  '<@' ||  m.DiscordID ||  '>' FROM Actions a left join Moderators m on m.Id = a.Mod left join ActionType t on t.Id = a.ActionType "
+    sQuery = f"SELECT ifnull(m.RedditName,'Deleted Mod Id ' + a.Mod), ifnull(t.Description,'Deleted Reason Id ' + a.ActionType), ifnull(NULLIF(a.Description, ''), ifnull(t.DefaultMessage,'')), a.Date, a.Link, a.User, a.Id, t.Weight,  '<@' ||  m.DiscordID ||  '>' FROM Actions a left join Moderators m on m.Id = a.Mod left join ActionType t on t.Id = a.ActionType "
     cur = con.cursor()
     if ActionId > 0:
         sQuery = sQuery + f"WHERE a.Id = '{ActionId}'"
@@ -699,6 +711,10 @@ def GetActionDetail(con, Link, ActionId, User):
 def InitAction(Link, con, reddit, SenderAction):
     linkType = GetLinkType(Link,con)
     if linkType > 0:
+        if linkType == 3:  #Modmail
+            modmail = reddit.subreddit(GetSetting(con,"subreddit")).modmail(SanatizeRedditLink(Link,con).rsplit('/',1)[1])
+            AuthorName = modmail.participant.name  # This returns a ``Redditor`` object.
+            Link = f"reddit.com/message/messages/{modmail.legacy_first_message_id}"
         rows = GetActionDetail(con, Link, 0,'')
         if len(rows) > 0:
             if rows[0]['TypeDesc'] is None:
@@ -708,7 +724,7 @@ def InitAction(Link, con, reddit, SenderAction):
             if linkType == 1:
                 submission = praw.models.Submission(reddit,url = Link)
                 AuthorName = submission.author.name
-            else:
+            elif linkType == 2:
                 comment = praw.models.Comment(reddit,url = Link)
                 AuthorName = comment.author.name  # This returns a ``Redditor`` object.
             row = (AuthorName, SanatizeRedditLink(Link,con), SenderAction['modID'],datetime.now() )

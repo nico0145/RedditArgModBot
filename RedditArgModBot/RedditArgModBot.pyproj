@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>9c323392-f301-4694-ba7e-8c45cfaa00b5</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>bot.py</StartupFile>
+    <StartupFile>AutoMod.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -21,6 +21,9 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="AutoMod.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="bot.py">
       <SubType>Code</SubType>
     </Compile>

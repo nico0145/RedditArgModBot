@@ -54,6 +54,11 @@ CREATE TABLE [Actions] (
 , [LastModmailUpdated] text NULL
 , [modmailID] text NULL
 );
+CREATE TABLE "PassFilterUser" (
+	[Id]	INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+	[User]	TEXT NOT NULL,
+	[Date]	TEXT NOT NULL
+);
 INSERT INTO [Settings] ([Id],[Key],[Value],[DataType]) VALUES (
 1,'subreddit','Argentina','str');
 INSERT INTO [Settings] ([Id],[Key],[Value],[DataType]) VALUES (
@@ -64,6 +69,10 @@ INSERT INTO [Settings] ([Id],[Key],[Value],[DataType]) VALUES (
 4,'RefreshModMail','60','int');
 INSERT INTO [Settings] ([Id],[Key],[Value],[DataType]) VALUES (
 5,'GaryChannel','821518583209263115','int');
+INSERT INTO [Settings] ([Id],[Key],[Value],[DataType]) VALUES (
+5,'PostsFiltroAutomod','30','int');
+INSERT INTO [Settings] ([Id],[Key],[Value],[DataType]) VALUES (
+5,'PuntosUsuarioProblematico','7','int');
 INSERT INTO [Policies] ([Id],[From],[To],[Action],[BanDays],[Message]) VALUES (
 1,1,5,1,-1,'Esta es una advertencia por tu post o comentario en /r/[Sub].\n\n\n\n**Nota de los moderadores:**\n\n>[Details]\n\n\n\n**Ultimas de faltas del usuario**\n\n[Summary]');
 INSERT INTO [Policies] ([Id],[From],[To],[Action],[BanDays],[Message]) VALUES (
