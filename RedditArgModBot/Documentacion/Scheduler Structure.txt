@@ -1,0 +1,121 @@
+{
+	"_helpComment":
+	"{
+		'SchedPosts':
+		{
+			'SchedPost' 
+			{
+				'Id'	INTEGER NOT NULL UNIQUE,
+				'Title'	TEXT NOT NULL,
+					Titulo del post
+				'Body'	TEXT,
+					Cuerpo del post,
+				'Flair': TEXT,
+					texto del flair (tiene que matchear con alguno de los flairs del sub),
+				'Sort': TEXT,
+					Valores posibles: confidence, top, new, controversial, old, random, qa, blank 
+				'RepeatUnit'	TEXT,
+					Valores posibles:
+						Day
+						Week
+						Month
+						Year
+						Custom
+				'RepeatValue'	INTEGER,
+					Valores posibles:
+						When RepeatUnit in (Day, Week, Month, Year)
+							Int
+						When Custom
+							Dias de la semana empezando el lunes:
+								ej: de lunes a viernes:
+									 LMXJVSD
+									'1111100'
+								ej: Lunes, Miercoles, sabado y domingo:
+									 LMXJVSD
+									'1010011'
+				'StartDate'	TEXT,
+					Fecha/hora de inicio del post recurrente
+				'TimeLenght'	NUMERIC,
+					Cuanto tiempo debe estar pinneado en datediff (unix timestamp) si es 0 o null no debe ser pinneado
+				'StickyPos' INTEGER, 
+					Posicion de sticky (1ero, 2do)
+					When TimeLenght == 0
+						0
+					else
+						1/2
+				'EndsUnit'	INTEGER,
+					Valores posibles:
+						Never
+						Date
+						Ocurrences
+				'EndsValue'	INTEGER,
+					Valores posibles:
+						When EndsUnit = Never
+							null
+						When EndsUnit = Date
+							EndDate > StartDate
+						When EndsUnit = Ocurrences
+							Int
+			}
+		}
+	}",
+	"SchedPosts":
+	[
+		{
+			"Id": 1,
+			"Title": "Thread Diario de Dudas, Consultas y Mitaps - {{date %d/%m}}",
+			"Body": "Thread Diario de Dudas y Consultas!",
+			"Flair": "Sticky",
+			"Sort": "new",
+			"RepeatUnit": "Custom",
+			"RepeatValue": 1111100,
+			"StartDate": "2021-10-04 06:00:00.000000",
+			"TimeLenght": 86399.0,
+			"StickyPos": 1,
+			"EndsUnit": "Never",
+			"EndsValue": null
+		},
+		{
+			"Id": 2,
+			"Title": "Lunes Random",
+			"Body": "Cosas Random",
+			"Flair": "Sticky",
+			"Sort": "new",
+			"RepeatUnit": "Custom",
+			"RepeatValue": 1000000,
+			"StartDate": "2021-10-04 06:00:00.000000",
+			"TimeLenght": 86399.0,
+			"StickyPos": 2,
+			"EndsUnit": "Never",
+			"EndsValue": null
+		},
+		{
+			"Id": 3,
+			"Title": "test1",
+			"Body": "Cosas Random",
+			"Flair": "Sticky",
+			"Sort": "new",
+			"RepeatUnit": "Year",
+			"RepeatValue": 1,
+			"StartDate": "2011-10-04 06:00:00.000000",
+			"TimeLenght": 86399.0,
+			"StickyPos": 2,
+			"EndsUnit": "Ocurrences",
+			"EndsValue": 5
+		},
+		{
+			"Id": 4,
+			"Title": "test2",
+			"Body": "Cosas Random",
+			"Flair": "Sticky",
+			"Sort": "new",
+			"RepeatUnit": "week",
+			"RepeatValue": 3,
+			"StartDate": "2011-10-04 06:00:00.000000",
+			"TimeLenght": 86399.0,
+			"StickyPos": 2,
+			"EndsUnit": "Date",
+			"EndsValue": "2021-10-04 06:00:00.000000"
+		}
+	]
+}

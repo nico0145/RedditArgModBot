@@ -1,0 +1,1 @@
+python "C:\Users\Nicolas\source\repos\RedditArgModBot\RedditArgModBot\AutoMod.py"
