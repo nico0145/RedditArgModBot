@@ -13,200 +13,147 @@ import requests
 from bs4 import BeautifulSoup
 import sys
 import tweepy
-import json
-from types import SimpleNamespace
 from dateutil.relativedelta import *
 import ssl
 import re
-class bcolors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
+from DBHandle import *
+from StaticHelpers import *
 
-
-def async_get_reddit_object():
-    try:
-        app_key = os.getenv('app_key')
-        app_secret = os.getenv('app_secret')
-        username = os.getenv('USUARIO')
-        password = os.getenv('password')
-        reddit = asyncpraw.Reddit(client_id=app_key,
-                        client_secret=app_secret,
-                        username=username,
-                        password=password,
-                        user_agent=username)
-
-        reddit.user.me()
-
-        return {'status': 'success', 'data': reddit}
-
-    except OAuthException as err:
-        return {'status': 'error', 'data': 'Error: Unable to get API access, please make sure API credentials are correct and try again (check the username and password first)'}
-
-    except ResponseException as err:
-        return {'status': 'error', 'data': 'Error: ResponseException: ' + str(err)}
-
-    except Exception as err:
-        return {'status': 'error', 'data': 'Unexpected Error: ' + str(err)} 
-def Log(Text,color,level):
-    print(f"{color}{Text}{bcolors.ENDC}\n------")
-    logging.log(level,Text)
-
-def main():
+def ReApproveUser(User):
+    DB.WriteDB(f"insert into PassFilterUser(User,Date) values('{User}',DATETIME())")
+def GetAVGWeight():
+    ActionExpires = DB.GetSetting("warnexpires")
+    return DB.GetDBValue(f"select avg(at.Weight) from Actions A JOIN ActionType AT on AT.id = A.ActionType where [ActionType] in (select id from ActionType where Weight < (select min([from]) from Policies where action = 2 and BanDays = -1) and Weight > 0) and [Date] > date(DATE(), '-{ActionExpires} day')")
+def GetLastActionDate(User):
+    return DB.GetDBValue(f"select max(Date) from Actions where User = '{User}'")
+def IsTroubleUser(User):
+    ActionExpires = DB.GetSetting("warnexpires")
+    #Avg = GetAVGWeight()
+    BaseThreshold = DB.GetSetting("PuntosUsuarioProblematico")
+    return DB.GetDBValue(f"select case when max(PFU.Date) > max(A.Date) then 'Pass' when sum(at.Weight) is null then 'Pass' when sum(at.Weight) < {BaseThreshold} THEN 'Pass' ELSE 'Block' end as 'Filter' from Actions A JOIN ActionType AT on AT.id = A.ActionType LEFT JOIN PassFilterUser PFU on PFU.User = A.User where A.User = '{User}' and [A].[Date] > date(DATE(), '-{ActionExpires} day')")
+load_dotenv()
+DB = DBHandle(os.getenv('DB'))
+sSubReddit = DB.GetSetting("subreddit")
+async def main():
     if os.name == 'nt': # Only if we are running on Windows
         from ctypes import windll
         k = windll.kernel32
         k.SetConsoleMode(k.GetStdHandle(-11), 7)
-    load_dotenv()
     logging.basicConfig(filename=os.getenv('AutomodLog'), encoding='utf-8', format='[%(asctime)s] %(message)s',  level=logging.INFO)
-    con = sl.connect(os.getenv('DB'),15)
-    rres = async_get_reddit_object()
+    rres = await async_get_reddit_object()
     if rres['status'] == 'success':
         reddit = rres['data']
         reddit.validate_on_submit = True
-        Start(reddit,con)
+        await Start(reddit)
     else:
         Log(rres['data'],bcolors.WARNING,logging.WARNING)
 
 
-def Start(reddit,con):
+async def Start(reddit):
     Log("Automod Started...",bcolors.OKCYAN,logging.INFO)
     ssl._create_default_https_context = ssl._create_unverified_context
-    #asyncio.Task(DebugCases(reddit,con))
-    asyncio.Task(ModLog(reddit,con))
-    asyncio.Task(AutoModComments(reddit,con))
-    asyncio.Task(AutoModPosts(reddit,con))
-    asyncio.Task(ModQueue(reddit,con))
-    asyncio.Task(Scheduler(reddit,con))
-    loop = asyncio.get_event_loop()
-    loop.run_forever()
-async def DebugCases(reddit,con):
-    subreddit = await reddit.subreddit(GetSetting(con,"subreddit"))
+    #asyncio.Task(DebugCases(reddit))
+    asyncio.Task(ModLog(reddit))
+    asyncio.Task(AutoModComments(reddit))
+    asyncio.Task(AutoModPosts(reddit))
+    asyncio.Task(ModQueue(reddit))
+    asyncio.Task(Scheduler(reddit))
+
+async def DebugCases(reddit):
+    subreddit = await reddit.subreddit(sSubReddit)
     #subreddit = await reddit.subreddit("GenteSexyRadio") #Para debug
     #submission2 = await reddit.submission("qq38sl")
     comment = asyncpraw.models.Comment(reddit,url = 'http://www.reddit.com/r/argentina/comments/qpr5pb/_/hjwsmm7')#await reddit.get_submission('http://www.reddit.com/r/argentina/comments/qpr5pb/_/hjwsmm7').comments[0]
     await comment.load()
-    #await AnalyzeSubmitter(con, subreddit, submission2,"post")
+    #await AnalyzeSubmitter(subreddit, submission2,"post")
     #await URLTitle(subreddit, submission2) #para debug
     #await CheckSpamPost(subreddit, submission2)
     await CheckSpamComment(subreddit, comment)
-
-def ReApproveUser(con,User):
-    con.execute(f"insert into PassFilterUser(User,Date) values('{User}',DATETIME())")
-    con.commit()
-def GetSetting(con,setting):
-    return GetDBValue(con,f"SELECT [Value] FROM Settings where [Key] = '{setting}'")
-def GetAVGWeight(con):
-    ActionExpires = GetSetting(con,"warnexpires")
-    return GetDBValue(con,f"select avg(at.Weight) from Actions A JOIN ActionType AT on AT.id = A.ActionType where [ActionType] in (select id from ActionType where Weight < (select min([from]) from Policies where action = 2 and BanDays = -1) and Weight > 0) and [Date] > date(DATE(), '-{ActionExpires} day')")
-def GetLastActionDate(con,User):
-    return GetDBValue(con,f"select max(Date) from Actions where User = '{User}'")
-def IsTroubleUser(con,User):
-    ActionExpires = GetSetting(con,"warnexpires")
-    #Avg = GetAVGWeight(con)
-    BaseThreshold = GetSetting(con,"PuntosUsuarioProblematico")
-    return GetDBValue(con,f"select case when max(PFU.Date) > max(A.Date) then 'Pass' when sum(at.Weight) is null then 'Pass' when sum(at.Weight) < {BaseThreshold} THEN 'Pass' ELSE 'Block' end as 'Filter' from Actions A JOIN ActionType AT on AT.id = A.ActionType LEFT JOIN PassFilterUser PFU on PFU.User = A.User where A.User = '{User}' and [A].[Date] > date(DATE(), '-{ActionExpires} day')")
-def GetDBValue(con,query):
-    return GetDBValues(con,query)[0][0]
-def GetDBValues(con,query):
-    cur = con.cursor()
-    cur.execute(query)
-    rows = cur.fetchall()
-    cur.close()
-    return rows
-async def Scheduler(reddit,con):
-    subreddit = await reddit.subreddit(GetSetting(con,"subreddit"))
+async def Scheduler(reddit):
+    subreddit = await reddit.subreddit(sSubReddit)
     wikiupdatesecscount = 0
     while True:
         try:
-            wikiobj = await GetWikiObj(con, subreddit)
+            wikiobj = await GetWikiObj(subreddit)
             revisionDate = wikiobj[0]
             schedPosts = wikiobj[1]
             while True:
                 stickied = filter(lambda x: x.IsStickied == True, schedPosts.SchedPosts)
                 for schedPost in stickied:
                     #check if they need to be unstickied first
-                    await CheckUnsticky(con, schedPost, reddit)
+                    await CheckUnsticky(schedPost, reddit)
                 for schedPost in schedPosts.SchedPosts:
                     if schedPost.nextTime > schedPost.lastPosted and schedPost.nextTime < datetime.utcnow():
-                        Log(f"Posting ID: {schedPost.Id} - Next Date: {schedPost.nextTime}",bcolors.OKCYAN,logging.INFO)
-                        flair = ""
-                        async for template in subreddit.flair.link_templates:
-                            if schedPost.Flair.lower() in template['text'].lower():
-                                flair = template['id']
-                        if len(flair)>0:
-                            post = await subreddit.submit(title = ReplaceStringFormat(schedPost.Title), selftext = ReplaceStringFormat(schedPost.Body), flair_id = flair, send_replies = False, nsfw = False, spoiler = False)
-                            if schedPost.TimeLenght > 0:
-                                await post.load()
-                                await post.mod.suggested_sort(schedPost.Sort)
-                                await post.mod.sticky(bottom=schedPost.StickyPos == 2)
-                                await VerifyUnstickyReplace(con, reddit)
-                            row = (schedPost.Id,datetime.utcfromtimestamp(post.created_utc).strftime('%Y-%m-%d %H:%M:%S.%f'),post.id, schedPost.TimeLenght > 0)
-                            await SaveSchedPost(con,row)
+                        if await PostSchedPost(DB, reddit, subreddit, schedPost):
                             schedPost.nextTime = GetNextScheduledPostTime(schedPost)
-                            GetLastPostedID(con, schedPost)
-                        else:
-                            Log(f"Error while posting scheduled post: flair {schedPost.Flair} not found",bcolors.WARNING,logging.WARNING)
-                            #log incorrect flair
+                            GetLastPostedID(schedPost)
                 await asyncio.sleep(1)
                 wikiupdatesecscount +=1
                 if wikiupdatesecscount > 45:
                     wikiupdatesecscount = 0
-                    wikiobj = await GetWikiObj(con, subreddit)
+                    wikiobj = await GetWikiObj(subreddit)
                     if wikiobj[0] > revisionDate:
                         schedPosts = wikiobj[1]
         except:
             Log(f"Error while doing scheduler: {sys.exc_info()[1]}",bcolors.WARNING,logging.WARNING)
-            
-def ReplaceStringFormat(sIn):
-    sIn = sIn.replace('[FechaCorta]', datetime.utcnow().strftime('%d/%m'))
-    return sIn
-async def VerifyUnstickyReplace(con, reddit):
-    StickiedPosts = GetDBValues(con, "select PostID from ScheduledPosts where IsStickied = 1")
+async def PostSchedPost(reddit, subreddit, schedPost):
+    Log(f"Posting ID: {schedPost.Id} - Next Date: {schedPost.nextTime}",bcolors.OKCYAN,logging.INFO)
+    flair = ""
+    async for template in subreddit.flair.link_templates:
+        if schedPost.Flair.lower() in template['text'].lower():
+            flair = template['id']
+    if len(flair)>0:
+        post = await subreddit.submit(title = ReplaceStringFormat(schedPost.Title), selftext = ReplaceStringFormat(schedPost.Body), flair_id = flair, send_replies = False, nsfw = False, spoiler = False)
+        if schedPost.TimeLenght > 0:
+            await post.load()
+            await post.mod.suggested_sort(schedPost.Sort)
+            await post.mod.sticky(bottom=schedPost.StickyPos == 2)
+            await VerifyUnstickyReplace(reddit)
+        row = (schedPost.Id,datetime.utcfromtimestamp(post.created_utc).strftime('%Y-%m-%d %H:%M:%S.%f'),post.id, schedPost.TimeLenght > 0)
+        await SaveSchedPost(row)
+        return True
+    else:
+        Log(f"Error while posting scheduled post: flair {schedPost.Flair} not found",bcolors.WARNING,logging.WARNING)
+        return False
+async def VerifyUnstickyReplace(reddit):
+    StickiedPosts = DB.ExecuteDB("select PostID from ScheduledPosts where IsStickied = 1")
     for postID in StickiedPosts:
         Post = await reddit.submission(postID[0])
         if Post.stickied == False:
-            con.execute(f"Update ScheduledPosts set IsStickied = false where PostID = '{postID[0]}'")
-            con.commit()
+            DB.WriteDB(f"Update ScheduledPosts set IsStickied = false where PostID = '{postID[0]}'")
             Log(f"Post ID: {postID[0]} - Sticky was replaced.",bcolors.OKCYAN,logging.INFO)
-async def SaveSchedPost(con,row):
-    con.execute("""INSERT INTO ScheduledPosts (RedditID,PostedDate, PostID, IsStickied) VALUES (?,?,?,?);""", row)
-    con.commit()
-def GetLastPostedID(con, schedPost):
-    schedPost.CurrDBId = GetDBValue(con,f"SELECT max(Id) FROM ScheduledPosts where [RedditID] = {schedPost.Id}")
+async def SaveSchedPost(row):
+    DB.WriteDB("""INSERT INTO ScheduledPosts (RedditID,PostedDate, PostID, IsStickied) VALUES (?,?,?,?);""", row)
+def GetLastPostedID(schedPost):
+    schedPost.CurrDBId = DB.GetDBValue(f"SELECT max(Id) FROM ScheduledPosts where [RedditID] = {schedPost.Id}")
     if schedPost.CurrDBId == None:
         schedPost.lastPosted = datetime.min
         schedPost.PostID = ""
         schedPost.IsStickied = False
     else:
-        schedPost.lastPosted = datetime.strptime(GetDBValue(con,f"SELECT [PostedDate] FROM ScheduledPosts where Id = {schedPost.CurrDBId}"), '%Y-%m-%d %H:%M:%S.%f')
-        schedPost.IsStickied = GetDBValue(con,f"SELECT [IsStickied] FROM ScheduledPosts where Id = {schedPost.CurrDBId}")
-        schedPost.PostID = GetDBValue(con,f"SELECT PostID FROM ScheduledPosts where Id = {schedPost.CurrDBId}")
-async def CheckUnsticky(con, schedPost, reddit):
+        DBRow = DB.ExecuteDB(f"SELECT [PostedDate], [IsStickied], PostID FROM ScheduledPosts where Id = {schedPost.CurrDBId}")[0]
+        schedPost.lastPosted = datetime.strptime(DBRow[0], '%Y-%m-%d %H:%M:%S.%f')
+        schedPost.IsStickied = DBRow[1]
+        schedPost.PostID = DBRow[2]
+async def CheckUnsticky(schedPost, reddit):
     if len(schedPost.PostID) > 0:
         if schedPost.TimeLenght > 0:
             mlastPosted = schedPost.lastPosted + relativedelta(seconds=+schedPost.TimeLenght)
         if mlastPosted < datetime.utcnow():
             post = await reddit.submission(schedPost.PostID)
             await post.mod.sticky(state = False)
-            con.execute(f"Update ScheduledPosts set IsStickied = false where Id = {schedPost.CurrDBId}")
-            con.commit()
+            DB.WriteDB(f"Update ScheduledPosts set IsStickied = false where Id = {schedPost.CurrDBId}")
             schedPost.IsStickied = False
             Log(f"Post ID: {schedPost.PostID} - unstickied",bcolors.OKCYAN,logging.INFO)
         #unsticky
-async def GetWikiObj(con, subreddit):
+async def GetWikiObj(subreddit):
     wiki = await subreddit.wiki.get_page("scheduledposts")
-    schedPosts = json.loads(wiki.content_md.replace("\t","").replace("\n",""),object_hook=lambda d: SimpleNamespace(**d))
+    schedPosts = GetSchedPostsFromWiki(wiki)
     for schedPost in schedPosts.SchedPosts:
         schedPost.nextTime = GetNextScheduledPostTime(schedPost)
-        GetLastPostedID(con, schedPost)
+        GetLastPostedID(schedPost)
     return (wiki.revision_date, schedPosts)
+
 #gets the next datetime you post
 #if the date is in the past then you can't post anymore unless the date is posterior to the last posted date in the DB
 def GetNextScheduledPostTime(SchedPost):
@@ -249,30 +196,30 @@ def ContinueSchedEval(nextDate, iterations,SchedPost):
     endUnit = SchedPost.EndsUnit.lower()
     if endUnit == "date":
         return passEndDate(nextDate,SchedPost)
-    if endUnit == "ocurrences":
+    if endUnit == "occurrences":
         if iterations < SchedPost.EndsValue:
             return nextDate < datetime.utcnow()
         return False
     #else, Never
     return nextDate < datetime.utcnow()
-async def AutoModComments(reddit,con):
-    subreddit = await reddit.subreddit(GetSetting(con,"subreddit"))
+async def AutoModComments(reddit):
+    subreddit = await reddit.subreddit(sSubReddit)
     while True:
         try:
             async for submission in subreddit.stream.comments(skip_existing=True):
-                await AnalyzeSubmitter(con, subreddit, submission,"comment")
+                await AnalyzeSubmitter(subreddit, submission,"comment")
         except:
             Log(f"Error while streaming comments: {sys.exc_info()[1]}",bcolors.WARNING,logging.WARNING)
-async def AutoModPosts(reddit,con):
-    subreddit = await reddit.subreddit(GetSetting(con,"subreddit"))
+async def AutoModPosts(reddit):
+    subreddit = await reddit.subreddit(sSubReddit)
     while True:
         try:
             async for submission in subreddit.stream.submissions(skip_existing=True):
-                await AnalyzeSubmitter(con, subreddit, submission,"post")
+                await AnalyzeSubmitter(subreddit, submission,"post")
         except:
             Log(f"Error while streaming comments: {sys.exc_info()[1]}",bcolors.WARNING,logging.WARNING)
-async def ModQueue(reddit,con):
-    subreddit = await reddit.subreddit(GetSetting(con,"subreddit"))
+async def ModQueue(reddit):
+    subreddit = await reddit.subreddit(sSubReddit)
     while True:
         try:
             async for log in subreddit.mod.stream.modqueue():
@@ -282,13 +229,13 @@ async def ModQueue(reddit,con):
                         Log(f"La cuenta del usuario {redditor.stream.redditor.name} fue suspendida por Reddit",bcolors.WARNING,logging.INFO)
                     else:
                         created = redditor.created_utc
-                        await AnalyzeNewAccountAction(subreddit, log.author, log, created, con)
+                        await AnalyzeNewAccountAction(subreddit, log.author, log, created)
         except:
             Log(f"Error while streaming ModQueue: {sys.exc_info()[1]}",bcolors.WARNING,logging.WARNING)
-async def ModLog(reddit,con):
-    subreddit = await reddit.subreddit(GetSetting(con,"subreddit"))
+async def ModLog(reddit):
+    subreddit = await reddit.subreddit(sSubReddit)
     while True:
-        maxDatestr = GetDBValue(con,"select max(date) as 'Date' from ModLog")
+        maxDatestr = DB.GetDBValue("select max(date) as 'Date' from ModLog")
         MaxDate = 0
         if maxDatestr is not None:
             MaxDate = time.mktime(datetime.strptime(maxDatestr, '%Y-%m-%d %H:%M:%S.%f').timetuple())
@@ -296,28 +243,27 @@ async def ModLog(reddit,con):
             async for log in subreddit.mod.stream.log():
                 if(log.created_utc > MaxDate):
                     row = (log.action,datetime.fromtimestamp(log.created_utc).strftime('%Y-%m-%d %H:%M:%S.%f'),log.description,log.mod.name,log.target_author,log.target_permalink )
-                    await SaveLog(con,row)
+                    await SaveLog(row)
         except:
             Log(f"Error while streaming ModLog: {sys.exc_info()[1]}",bcolors.WARNING,logging.WARNING)
 
-async def SaveLog(con,row):
-    con.execute("""INSERT INTO ModLog (Action,Date, Description, ModName, Author, Permalink) VALUES (?,?,?,?,?,?);""", row)
-    con.commit()
-async def AnalyzeNewAccountAction(subreddit, author, log, created, con):
+async def SaveLog(row):
+    DB.WriteDB("""INSERT INTO ModLog (Action,Date, Description, ModName, Author, Permalink) VALUES (?,?,?,?,?,?);""", row)
+async def AnalyzeNewAccountAction(subreddit, author, log, created):
     Log(f"Veryfing new account submission for User: {author.name}",bcolors.OKCYAN,logging.DEBUG)
-    PostsLeft = await AllowNewAccount(subreddit, author, created, con)
+    PostsLeft = await AllowNewAccount(subreddit, author, created)
     if PostsLeft == 0:
         Log(f"User: {author.name} Passed the new account filter, approving submission in modqueue:\n{log.permalink}",bcolors.OKCYAN,logging.INFO)
         await log.mod.approve()
     else:
         Log(f"User: {author.name} didn't pass the new account filter, {PostsLeft} posts left",bcolors.OKCYAN,logging.DEBUG)
 
-async def AllowNewAccount(subreddit, author, end_date,con):
+async def AllowNewAccount(subreddit, author, end_date):
     async for contributor in subreddit.contributor():
         if author.name == contributor.name: #si el usuario esta en la lista de usuarios aprobados entonces no pasa por el filtro de cuenta nueva
             return 0
-    lastActionDate = GetLastActionDate(con, author.name)
-    EntryLimit = int(GetSetting(con,"PostsFiltroAutomod"))
+    lastActionDate = GetLastActionDate(author.name)
+    EntryLimit = int(DB.GetSetting("PostsFiltroAutomod"))
     if lastActionDate is not None:
         lastActionDate = time.mktime(datetime.strptime(lastActionDate, '%Y-%m-%d %H:%M:%S.%f').timetuple())
         if lastActionDate > end_date: #Si tiene cualquier tipo de medidas reducimos la fecha a la fecha de la ultima medida para ahorrar tiempo de busqueda
@@ -343,14 +289,14 @@ async def AllowNewAccount(subreddit, author, end_date,con):
             break
     return EntryLimit
 
-async def AnalyzeSubmitter(con, subreddit, submission, type):
+async def AnalyzeSubmitter(subreddit, submission, type):
     if submission.author is None:
         await submission.report(f"Usuario eliminado.")
         Log(f"No author found for submission: \'{submission.title}\' URL: {submission.permalink} the post was reported to the modqueue", bcolors.WARNING,logging.INFO)
     else:
         Log(f"Checking new submission by User: {submission.author.name}",bcolors.OKBLUE,logging.DEBUG)
-        if IsTroubleUser(con, submission.author.name) == "Block":
-            asyncio.create_task(HandleTroubleUser(con, subreddit, submission))
+        if IsTroubleUser(submission.author.name) == "Block":
+            asyncio.create_task(HandleTroubleUser(subreddit, submission))
         else:
             Log(f"User {submission.author.name} verified.",bcolors.OKBLUE,logging.DEBUG)
         if type == "post":
@@ -451,21 +397,23 @@ async def OneHourBetweenPosts(subreddit, submission):
         async for oldsubmission in submission.author.submissions.new():
             if oldsubmission.created_utc < end_date:
                 break
-            if oldsubmission.subreddit.display_name.lower() == subreddit.display_name.lower() and oldsubmission != submission:
+            if oldsubmission.subreddit.display_name.lower() == subreddit.display_name.lower() and oldsubmission != submission and not oldsubmission.removed:
                 TimeLeft = time.strftime("%M:%S", time.gmtime(end_date - oldsubmission.created_utc))
                 Log(f"Less than an hour ({TimeLeft}) between posts for User {submission.author.name} the post was reported to the modqueue",bcolors.WARNING,logging.INFO)
                 await submission.report(f"Dejar pasar una hora entre posts (Tiempo entre posteos: {TimeLeft})")
     except Exception as err:
         Log(f"Error on OneHourBetweenPosts: {str(err)}", bcolors.WARNING,logging.ERROR)
-async def HandleTroubleUser(con, subreddit, submission):
+async def HandleTroubleUser(subreddit, submission):
     Log(f"User {submission.author.name} is flagged as a troublesome user, checking last mod actions...",bcolors.WARNING,logging.DEBUG)
-    PostsLeft = await AllowNewAccount(subreddit, submission.author, 0,con)
+    PostsLeft = await AllowNewAccount(subreddit, submission.author, 0)
     if PostsLeft == 0:
-        ReApproveUser(con, submission.author.name)
+        ReApproveUser(submission.author.name)
         Log(f"User {submission.author.name} re-approved",bcolors.OKGREEN,logging.INFO)
     else:
         Log(f"Troublesome User {submission.author.name} has been reported to the modqueue, {PostsLeft} posts left",bcolors.WARNING,logging.INFO)
         await submission.report(f"Usuario Problematico por otros {PostsLeft} posteos")
 
 if __name__ == "__main__":
-    main()
+    asyncio.Task(main())
+    loop = asyncio.get_event_loop()
+    loop.run_forever()
