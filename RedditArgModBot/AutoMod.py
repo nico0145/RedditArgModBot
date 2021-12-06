@@ -96,25 +96,6 @@ async def Scheduler(reddit):
                         schedPosts = wikiobj[1]
         except:
             Log(f"Error while doing scheduler: {sys.exc_info()[1]}",bcolors.WARNING,logging.WARNING)
-async def PostSchedPost(reddit, subreddit, schedPost):
-    Log(f"Posting ID: {schedPost.Id} - Next Date: {schedPost.nextTime}",bcolors.OKCYAN,logging.INFO)
-    flair = ""
-    async for template in subreddit.flair.link_templates:
-        if schedPost.Flair.lower() in template['text'].lower():
-            flair = template['id']
-    if len(flair)>0:
-        post = await subreddit.submit(title = ReplaceStringFormat(schedPost.Title), selftext = ReplaceStringFormat(schedPost.Body), flair_id = flair, send_replies = False, nsfw = False, spoiler = False)
-        if schedPost.TimeLenght > 0:
-            await post.load()
-            await post.mod.suggested_sort(schedPost.Sort)
-            await post.mod.sticky(bottom=schedPost.StickyPos == 2)
-            await VerifyUnstickyReplace(reddit)
-        row = (schedPost.Id,datetime.utcfromtimestamp(post.created_utc).strftime('%Y-%m-%d %H:%M:%S.%f'),post.id, schedPost.TimeLenght > 0)
-        await SaveSchedPost(row)
-        return True
-    else:
-        Log(f"Error while posting scheduled post: flair {schedPost.Flair} not found",bcolors.WARNING,logging.WARNING)
-        return False
 async def VerifyUnstickyReplace(reddit):
     StickiedPosts = DB.ExecuteDB("select PostID from ScheduledPosts where IsStickied = 1")
     for postID in StickiedPosts:
