@@ -25,7 +25,10 @@ class DBHandle(object):
         cur.close()
         return rows
     def GetDBValue(self, query):
-        return self.ExecuteDB(query)[0][0]
+        values = self.ExecuteDB(query)
+        if len(values) > 0:
+            return values[0][0]
+        return None
     def GetSetting(self, setting, ModId = 0):
         return self.GetDBValue(f"SELECT [Value] FROM Settings where [Key] = '{setting}'")
     def GetTable(self, sQuery):

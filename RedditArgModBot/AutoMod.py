@@ -96,13 +96,6 @@ async def Scheduler(reddit):
                         schedPosts = wikiobj[1]
         except:
             Log(f"Error while doing scheduler: {sys.exc_info()[1]}",bcolors.WARNING,logging.WARNING)
-async def VerifyUnstickyReplace(reddit):
-    StickiedPosts = DB.ExecuteDB("select PostID from ScheduledPosts where IsStickied = 1")
-    for postID in StickiedPosts:
-        Post = await reddit.submission(postID[0])
-        if Post.stickied == False:
-            DB.WriteDB(f"Update ScheduledPosts set IsStickied = false where PostID = '{postID[0]}'")
-            Log(f"Post ID: {postID[0]} - Sticky was replaced.",bcolors.OKCYAN,logging.INFO)
 async def SaveSchedPost(row):
     DB.WriteDB("""INSERT INTO ScheduledPosts (RedditID,PostedDate, PostID, IsStickied) VALUES (?,?,?,?);""", row)
 def GetLastPostedID(schedPost):

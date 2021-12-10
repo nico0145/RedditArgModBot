@@ -14,16 +14,13 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from dateutil.relativedelta import *
 from DBHandle import *
+from DiscordHandle import *
 from StaticHelpers import *
-class Message:
-    def __init__(self,Embed, NoDel, Type, Content):
-        self.Embed = Embed
-        self.NoDel = NoDel
-        self.Type = Type
-        self.Content = Content
-class MessageType:
-    Text = 1
-    Image = 2
+class UserStatus:
+    def __init__(self,Id, Roles, PendingAction):
+        self.Id = Id
+        self.Roles = Roles
+        self.PendingAction = PendingAction
 class UserSubmission:
     def __init__(self,Type, created_utc, score, removed):
         self.Type = Type
@@ -57,7 +54,7 @@ async def CheckModmail():
                     await mail.read()
                 else:
                     sQuery += f" or (a.modmailID = '{mail.id}' and ifnull(a.LastModmailUpdated,'{mail.last_user_update}')  <= '{mail.last_user_update}')"
-            sQuery = f"select a.User, '<@' ||  m.DiscordID ||  '>', 'https://mod.reddit.com/mail/inbox/'|| a.modmailID,'https://'|| a.Link, at.Description, a.Id, a.LastModmailUpdated from Actions a join Moderators m on m.Id = a.Mod join ActionType at on at.Id = a.ActionType where {sQuery[4:]}"
+            sQuery = f"select a.User, '<@' ||  m.DiscordID ||  '>', 'https://mod.reddit.com/mail/inbox/'|| a.modmailID,'https://'|| a.Link, at.Description, a.Id, a.LastModmailUpdated from Actions a join DiscordUsers m on m.Id = a.Mod join ActionType at on at.Id = a.ActionType where {sQuery[4:]}"
             rows = DB.ExecuteDB(sQuery)
             #print(f"Query: '{sQuery}'\nDB Matches: {len(rows)}\n")
             if len(rows) > 0:
@@ -85,141 +82,85 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-    Response = None
+    Response = []
     if message.author == client.user:
         return
     SenderAction = CheckSender(message.author)
-    if SenderAction['modID'] != '0': 
+    if 'Bot User' in SenderAction.Roles or 'Admin' in SenderAction.Roles: 
         StandardMessage = message.content.lower()
         if StandardMessage.strip(' ')=="gary":
-            Response = [Message(False,False,MessageType.Text,"gary - Muestra esta ayuda\nwarns <user> - Muestra los warns de un usuario\nunwarn <id> - Elimina un warn especifico\nunban <user> - desbannea a un usuario\napproveuser <user> - Agrega a un usuario a la lista de usuarios aprobados\nmods - funciones de moderador\nsettings - configura las preferencias\npolicies - configura las politicas de moderacion\nreasons - configura los motivos de sancion\nstats - Muestra estadisticas de moderacion\nschedposts - Muestra los posts programados\n<link> - inicia el proceso de warn")]
+            Response = [Message(False,False,MessageType.Text,"gary - Muestra esta ayuda\nwarns <user> - Muestra los warns de un usuario\nunwarn <id> - Elimina un warn especifico\nunban <user> - desbannea a un usuario\napproveuser <user> - Agrega a un usuario a la lista de usuarios aprobados\nusers - funciones de usuarios\nroles - funciones de roles\nsettings - configura las preferencias\npolicies - configura las politicas de moderacion\nreasons - configura los motivos de sancion\nstats - Muestra estadisticas de moderacion\nschedposts - Muestra los posts programados\n<link> - inicia el proceso de warn")]
         elif StandardMessage.startswith('warns '):
-            Response = GetWarns(message.content[6:].strip(' '))
-        elif StandardMessage.startswith('unwarn '):
-            Response = Unwarn(message.content[7:].strip(' '))
-        elif StandardMessage.startswith('unban '):
-            Response = await Unban(message.content[6:].strip(' '), reddit)
-        elif StandardMessage.startswith('approveuser '):
-            Response = await ApproveUser(message.content[11:].strip(' '), reddit)
-        elif StandardMessage.startswith('mods'):
-            #MassSanatizeLinks() this is here if we need to run a mass sanatization if reddit changes the URL formats or something
-            Response = HandleMods(message.content[5:].strip(' '))
-        elif StandardMessage.startswith('settings'):
-            Response = HandleSettings(message.content[9:].strip(' '))
-        elif StandardMessage.startswith('policies'):
-            Response = HandlePolicies(message.content[9:].strip(' '))
-        elif StandardMessage.startswith('reasons'):
-            Response = HandleReasons(message.content[8:].strip(' '))
-        elif StandardMessage.startswith('stats'):
-            Response = await HandleStats(message.content[6:].strip(' '), SenderAction['modID'], reddit)
-        elif StandardMessage.startswith('schedposts'):
-            Response = await HandleSchedposts(message.content[10:].strip(' '), reddit)
-        elif StandardMessage.strip(' ')=="undo":
-            if SenderAction['status'] > 0:
-                DeletePending(SenderAction['status'])
-                Response = [Message(False,False,MessageType.Text,f"WarnID {SenderAction['status']} pendiente eliminado.")]
+            if 'Reddit Mod' in SenderAction.Roles: 
+                Response = GetWarns(message.content[6:].strip(' '))
             else:
-                Response = [Message(False,False,MessageType.Text,"No hay warnings pendientes.")]
-        else:
-            if SenderAction['status'] == 0:
+                Response = [Message(False,False,MessageType.Text,"Se requiere del rol Reddit Mod para consultar warns.")]
+        elif StandardMessage.startswith('unwarn '):
+            if 'Reddit Mod' in SenderAction.Roles: 
+                Response = Unwarn(message.content[7:].strip(' '))
+            else:
+                Response = [Message(False,False,MessageType.Text,"Se requiere del rol Reddit Mod para remover warns.")]
+        elif StandardMessage.startswith('unban '):
+            if 'Reddit Mod' in SenderAction.Roles: 
+                Response = await Unban(message.content[6:].strip(' '), reddit)
+            else:
+                Response = [Message(False,False,MessageType.Text,"Se requiere del rol Reddit Mod para remover bans.")]
+        elif StandardMessage.startswith('approveuser '):
+            if 'Reddit Mod' in SenderAction.Roles: 
+                Response = await ApproveUser(message.content[11:].strip(' '), reddit)
+            else:
+                Response = [Message(False,False,MessageType.Text,"Se requiere del rol Reddit Mod para aprobar usuarios.")]
+            #MassSanatizeLinks() this is here if we need to run a mass sanatization if reddit changes the URL formats or something
+        elif StandardMessage.startswith('users'):
+            Response = HandleUsers(message.content[6:].strip(' '),SenderAction.Roles)
+        elif StandardMessage.startswith('settings'):
+            Response = HandleSettings(message.content[9:].strip(' '), SenderAction.Roles)
+        elif StandardMessage.startswith('roles'):
+            Response = HandleRoles(message.content[9:].strip(' '))
+        elif StandardMessage.startswith('policies'):
+            Response = HandlePolicies(message.content[9:].strip(' '),SenderAction.Roles)
+        elif StandardMessage.startswith('reasons'):
+            Response = HandleReasons(message.content[8:].strip(' '),SenderAction.Roles)
+        elif StandardMessage.startswith('stats'):
+            Response = await HandleStats(message.content[6:].strip(' '), SenderAction.Id, reddit)
+        elif StandardMessage.startswith('schedposts'):
+            if 'Reddit Mod' in SenderAction.Roles: 
+                Response = await HandleSchedposts(message.content[10:].strip(' '), reddit)
+            else:
+                Response = [Message(False,False,MessageType.Text,"Se requiere del rol Reddit Mod para administrar posts recurrentes.")]
+        elif StandardMessage.strip(' ')=="undo":
+            if 'Reddit Mod' in SenderAction.Roles: 
+                if not SenderAction.PendingAction is None:
+                    DeletePending(SenderAction.PendingAction)
+                    Response = [Message(False,False,MessageType.Text,f"WarnID {SenderAction.PendingAction} pendiente eliminado.")]
+                else:
+                    Response = [Message(False,False,MessageType.Text,"No hay warnings pendientes.")]
+        elif 'Reddit Mod' in SenderAction.Roles: 
+            if SenderAction.PendingAction is None:
                 Response = await InitAction(message.content, reddit, SenderAction)
             else:
                 linkType = GetLinkType(message.content)
                 if linkType != 0:
-                    DeletePending(SenderAction['status']) #el mod mando otro link en vez de responder, borrar lo pendiente y hacer uno nuevo
+                    DeletePending(SenderAction.PendingAction) #el mod mando otro link en vez de responder, borrar lo pendiente y hacer uno nuevo
                     Response = await InitAction(message.content, reddit, SenderAction)
                 else:
-                    Response = await ResolveAction(message.content, SenderAction['status'], reddit)
+                    Response = await ResolveAction(message.content, SenderAction.PendingAction, reddit)
         for IndResponse in Response:
-            asyncio.Task(HandleMessage(message,IndResponse))
+            if IndResponse.To == Recipient.Channel:
+                asyncio.Task(HandleMessage(int(os.getenv('DiscordMaxChars')),DB, message,IndResponse))
+            else:
+                asyncio.Task(HandleDirectMessage(int(os.getenv('DiscordMaxChars')),DB, client, message.author,IndResponse))
             await asyncio.sleep(1)
 
 
     if message.content == 'raise-exception':
         raise discord.DiscordException
-    #def GetModLog(reddit, user):
-    #    target_author
-    #    mod
-    #    action
-    #    target_permalink
-    #    created_utc
-async def HandleMessage(message, Response):
-    Msgs = []
-    bEmbed = False
-    if Response.Type == MessageType.Text:
-        for indRes in Sectionize(Response.Content, "--------------------", True):
-            if Response.Embed:
-                embMsg = discord.Embed()
-                embMsg.description = indRes
-                sentMsg = await message.channel.send(embed=embMsg)
-            else:
-                sentMsg = await message.channel.send(indRes)
-            Msgs.append(sentMsg)
-    elif Response.Type == MessageType.Image:
-        sentMsg = await message.channel.send(file=discord.File(Response.Content))
-        Msgs.append(sentMsg)
-    seconds = int(DB.GetSetting("DelMsgAfterSeconds"))
-    if seconds > 0 and not Response.NoDel:
-        await asyncio.sleep(seconds)
-        for Msg in Msgs:
-            await Msg.delete()
 
-def Sectionize(sIn, sSplit, UseNewLinesForChunks):
-    Max = int(os.getenv('DiscordMaxChars'))
-    sIn = sIn.strip("\n")
-    chunks = sIn.split(sSplit)
-    retChunks = []
-    sRet = ""
-    for chunk in chunks:
-        chunk = chunk.strip("\n")
-        if len(chunk) > 0:
-            if(UseNewLinesForChunks):
-                sSeparator = f"\n{sSplit}\n"
-            else:
-                sSeparator = sSplit
-            if len(sRet + chunk + sSeparator) > Max:
-                if len(sRet) == 0: #this chunk is larger than the limit by itself, cut it in pieces 
-                    if UseNewLinesForChunks:
-                        spaceChunks = Sectionize(chunk,"\n",False)
-                        for spaceChunk in spaceChunks:
-                            if len(spaceChunk) > Max:
-                                CutStringInPieces(spaceChunk, Max, retChunks)
-                            elif len(spaceChunk) > 0:
-                                retChunks.append(spaceChunk)
-                    else:
-                        CutStringInPieces(chunk, Max, retChunks)
-                else: #The concat of chunks went over the limit on this set, don't use this last chunk for now, add it to the next set
-                    retChunks.append(sRet)
-                    sRet = chunk + sSeparator
-            else:
-                sRet = sRet + chunk + sSeparator
-    if len(sRet) > 0:
-        retChunks.append(sRet.rstrip(sSeparator))
-    if UseNewLinesForChunks: #Esta funcion esta bien pero hasta ahi nomas, si tenes un cacho de exacto 2000 caracteres y tenes que agregarle las comillas discord te va a romper la pija,
-                             #lo ideal seria verificar esto mientras estas armando los cachos mas arriba pero toda la paja
-        iAux = 0
-        TabSymb = '```'
-        OpenTable = False
-        while iAux < len(retChunks):
-            if OpenTable:
-                retChunks[iAux] = TabSymb + retChunks[iAux]
-                OpenTable = False
-            if retChunks[iAux].count(TabSymb) % 2 != 0: # Si esto es verdadero tenes que cerrar la tabla en este cacho y abrirla en el siguiente
-                retChunks[iAux] +=TabSymb
-                OpenTable = True
-            iAux +=1
-
-    return retChunks
 def MassSanatizeLinks():
     rows = DB.ExecuteDB(f"SELECT Id, Link FROM Actions")
     sSub = DB.GetSetting("subreddit").lower()
     for row in rows:
         DB.WriteDB(f"Update Actions set [Link] = '{SanatizeRedditLinkSub(row[1], sSub)}' WHERE Id = {row[0]}")
-def CutStringInPieces(chunk, Max, retChunks):
-    while len(chunk) > Max:
-        retChunks.append(chunk[:Max])
-        chunk = chunk[Max:]
-    retChunks.append(chunk)
 def SanatizeRedditLinkSub(sIn,subReddit):
     sIn = sIn.lstrip('http')
     sIn = sIn.lstrip('s')
@@ -244,15 +185,24 @@ def SanatizeRedditLinkSub(sIn,subReddit):
 
 def SanatizeRedditLink(sIn):
     return SanatizeRedditLinkSub(sIn, DB.GetSetting("subreddit").lower())   
-def HandleReasons(sCommand):
+def HandleReasons(sCommand, UserRoles):
     if sCommand.lower().startswith('list'):
         return GetReasons()
     if sCommand.lower().startswith('edit '):
-        return EditReason(sCommand[4:].strip(' '))
+        if 'Bot Config' in UserRoles: 
+            return EditReason(sCommand[4:].strip(' '))
+        else:
+            return [Message(False,False,MessageType.Text,"Se requiere del rol Bot Config para modificar motivos.")]
     if sCommand.lower().startswith('remove '):
-        return RemoveReason(sCommand[6:].strip(' '))
+        if 'Bot Config' in UserRoles: 
+            return RemoveReason(sCommand[6:].strip(' '))
+        else:
+            return [Message(False,False,MessageType.Text,"Se requiere del rol Bot Config para remover motivos.")]
     if sCommand.lower().startswith('setdefaultmessage '):
-        return DefaultMessageReason(sCommand[17:].strip(' '))
+        if 'Bot Config' in UserRoles: 
+            return DefaultMessageReason(sCommand[17:].strip(' '))
+        else:
+            return [Message(False,False,MessageType.Text,"Se requiere del rol Bot Config para editar los mensajes por defecto.")]
     else:
         return [Message(False,False,MessageType.Text,"reasons list - Muestra un listado de los motivos\nreasons remove <id> - Elimina un motivo\nreasons edit <id (entero, si esta vacio es un nuevo registro)>,<Descripcion(texto)>,<Peso(entero)> - Agrega o edita un motivo\nreasons setdefaultmessage <id (entero)>,<Descripcion(texto)> - Agrega (o quita si esta vacio) un mensaje por defecto a los motivos")]
 def DefaultMessageReason(sCommand):
@@ -433,7 +383,7 @@ def HandleModStats(sCommand, ModID):
     msgRetu = []
     if len(sCommand) > 0:
         sCommand = sCommand.lower()
-        msgRetu.append(Message(False,False,MessageType.Text,f"**Estadisticas del mod {sCommand}**\n" + DB.GetTable(f"Select at.Description as Motivo, count(1) as Cantidad from Actions A join Moderators M on M.Id = A.Mod join ActionType AT on A.ActionType = AT.Id Where lower(M.Name) = '{sCommand}' group by at.Description order by Cantidad desc")))
+        msgRetu.append(Message(False,False,MessageType.Text,f"**Estadisticas del mod {sCommand}**\n" + DB.GetTable(f"Select at.Description as Motivo, count(1) as Cantidad from Actions A join DiscordUsers M on M.Id = A.Mod join ActionType AT on A.ActionType = AT.Id Where lower(M.Name) = '{sCommand}' group by at.Description order by Cantidad desc")))
         plot = GetModYearLog(sCommand,'plot.png')
         if len(plot) > 0:
             msgRetu.append(Message(False,False,MessageType.Image,plot))
@@ -444,38 +394,43 @@ def HandleModStats(sCommand, ModID):
         if len(plot) > 0:
             msgRetu.append(Message(False,False,MessageType.Image,plot))
     else:
-        msgRetu.append(Message(False,False,MessageType.Text,"**Estadisticas de Moderadores**\n" + DB.GetTable("select t1.Moderador, t1.Cantidad, t2.Puntos, printf(\"%.2f\", t2.Puntos*1.0 / t1.Cantidad*1.0) as PuntosPorAccion from  (select m.Name as Moderador, count(1) as Cantidad from Actions A join Moderators M on M.Id = A.Mod group by m.Name) t1 join (select m.Name as Moderador, sum(AT.Weight) as Puntos from Actions A join ActionType AT on A.ActionType = AT.Id join Moderators M on M.Id = A.Mod group by m.Name) t2 on t2.Moderador =t1.Moderador order by PuntosPorAccion desc") + "\n\n"))
+        msgRetu.append(Message(False,False,MessageType.Text,"**Estadisticas de Moderadores**\n" + DB.GetTable("select t1.Moderador, t1.Cantidad, t2.Puntos, printf(\"%.2f\", t2.Puntos*1.0 / t1.Cantidad*1.0) as PuntosPorAccion from  (select m.Name as Moderador, count(1) as Cantidad from Actions A join DiscordUsers M on M.Id = A.Mod group by m.Name) t1 join (select m.Name as Moderador, sum(AT.Weight) as Puntos from Actions A join ActionType AT on A.ActionType = AT.Id join DiscordUsers M on M.Id = A.Mod group by m.Name) t2 on t2.Moderador =t1.Moderador order by PuntosPorAccion desc") + "\n\n"))
     return msgRetu
 def GetModYearLog(sCommand, pltName, lineLabel = '', new = True):
+    sCommand = sCommand.lower().replace('_', '\_')
     sQuery =    "select sum(cnt) as cnt, mes From(" \
-                "select count(1) as 'cnt', strftime(\"%m-%Y\", a.Date) as 'mes' "\
+                "select count(1) as 'cnt', strftime(\"%Y-%m\", a.Date) as 'mes' "\
                 "from Actions A "\
-                "join Moderators M on M.Id = A.Mod "\
-                f"where lower(M.name) = '{sCommand.lower()}' "\
+                "join DiscordUsers M on M.Id = A.Mod "\
+                f"where lower(M.name) = '{sCommand}' "\
                 "and a.Date > DATE(Date(),'-1 years') "\
                 "group by mes "\
                 "union "\
-                "select count(1) as 'cnt', strftime(\"%m-%Y\", ML.Date) as 'mes' "\
+                "select count(1) as 'cnt', strftime(\"%Y-%m\", ML.Date) as 'mes' "\
                 "from ModLog ML "\
-                "join Moderators M on lower(M.redditname) = lower(ML.ModName) "\
-                f"where lower(M.Name) = '{sCommand.lower()}' and ML.Date > DATE(Date(),'-1 years') "\
+                "join RedditUsers R on lower(R.redditname) = lower(ML.ModName) " \
+                "join DiscordRedditUser DR on DR.RedditId =R.Id " \
+                "join DiscordUsers M on M.Id = DR.DiscordId "\
+                f"where lower(M.Name) = '{sCommand}' and ML.Date > DATE(Date(),'-1 years') "\
                 "and (ML.Action like 'approve%' or ML.Action like 'remove%') "\
                 "group by mes)H group by mes"
     if new == False:
         return CreateLinePlot(sQuery,pltName, 'Mes', 'Cantidad de Acciones', 'Acciones por Mes', new, lineLabel)
     CreateLinePlot(sQuery,pltName, 'Mes', 'Cantidad de Acciones', 'Acciones por Mes', new,lineLabel = "Aprobados",fill = True)
     sQuery =    "select sum(cnt) as cnt, mes From(" \
-                "select count(1) as 'cnt', strftime(\"%m-%Y\", a.Date) as 'mes' "\
+                "select count(1) as 'cnt', strftime(\"%Y-%m\", a.Date) as 'mes' "\
                 "from Actions A "\
-                "join Moderators M on M.Id = A.Mod "\
-                f"where lower(M.name) = '{sCommand.lower()}' "\
+                "join DiscordUsers M on M.Id = A.Mod "\
+                f"where lower(M.name) = '{sCommand}' "\
                 "and a.Date > DATE(Date(),'-1 years') "\
                 "group by mes "\
                 "union "\
-                "select count(1) as 'cnt', strftime(\"%m-%Y\", ML.Date) as 'mes' "\
+                "select count(1) as 'cnt', strftime(\"%Y-%m\", ML.Date) as 'mes' "\
                 "from ModLog ML "\
-                "join Moderators M on lower(M.redditname) = lower(ML.ModName) "\
-                f"where lower(M.Name) = '{sCommand.lower()}' and ML.Date > DATE(Date(),'-1 years') "\
+                "join RedditUsers R on lower(R.redditname) = lower(ML.ModName) " \
+                "join DiscordRedditUser DR on DR.RedditId =R.Id " \
+                "join DiscordUsers M on M.Id = DR.DiscordId "\
+                f"where lower(M.Name) = '{sCommand}' and ML.Date > DATE(Date(),'-1 years') "\
                 "and (ML.Action like 'remove%') "\
                 "group by mes)H group by mes"
     return CreateLinePlot(sQuery,pltName, 'Mes', 'Cantidad de Acciones', 'Acciones por Mes', False, lineLabel = "Removidos",fill = True)
@@ -484,18 +439,21 @@ def GetModMonthLog(sCommand, pltName, lineLabel = '', new = True):
     fmt_day = mdates.DayLocator(interval = 5)
     ax.xaxis.set_major_locator(fmt_day)
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+    sCommand = sCommand.lower().replace('_', '\_')
     sQuery =    "select sum(cnt) as cnt, dia From(" \
                 "select count(1) as 'cnt', strftime(\"%Y-%m-%d\", a.Date) as 'dia' "\
                 "from Actions A "\
-                "join Moderators M on M.Id = A.Mod "\
-                f"where lower(M.name) = '{sCommand.lower()}' "\
+                "join DiscordUsers M on M.Id = A.Mod "\
+                f"where lower(M.name) = '{sCommand}' "\
                 "and a.Date > DATE(Date(),'-1 months') "\
                 "group by dia "\
                 "union "\
                 "select count(1) as 'cnt', strftime(\"%Y-%m-%d\", ML.Date) as 'dia' "\
                 "from ModLog ML "\
-                "join Moderators M on lower(M.redditname) = lower(ML.ModName) "\
-                f"where lower(M.Name) = '{sCommand.lower()}' and ML.Date > DATE(Date(),'-1 months') "\
+                "join RedditUsers R on lower(R.redditname) = lower(ML.ModName) " \
+                "join DiscordRedditUser DR on DR.RedditId =R.Id " \
+                "join DiscordUsers M on M.Id = DR.DiscordId "\
+                f"where lower(M.Name) = '{sCommand}' and ML.Date > DATE(Date(),'-1 months') "\
                 "and (ML.Action like 'approve%' or ML.Action like 'remove%') "\
                 "group by dia)H group by dia order by dia"
     if new == False:
@@ -504,15 +462,17 @@ def GetModMonthLog(sCommand, pltName, lineLabel = '', new = True):
     sQuery =    "select sum(cnt) as cnt, dia From(" \
                 "select count(1) as 'cnt', strftime(\"%Y-%m-%d\", a.Date) as 'dia' "\
                 "from Actions A "\
-                "join Moderators M on M.Id = A.Mod "\
-                f"where lower(M.name) = '{sCommand.lower()}' "\
+                "join DiscordUsers M on M.Id = A.Mod "\
+                f"where lower(M.name) = '{sCommand}' "\
                 "and a.Date > DATE(Date(),'-1 months') "\
                 "group by dia "\
                 "union "\
                 "select count(1) as 'cnt', strftime(\"%Y-%m-%d\", ML.Date) as 'dia' "\
                 "from ModLog ML "\
-                "join Moderators M on lower(M.redditname) = lower(ML.ModName) "\
-                f"where lower(M.Name) = '{sCommand.lower()}' and ML.Date > DATE(Date(),'-1 months') "\
+                "join RedditUsers R on lower(R.redditname) = lower(ML.ModName) " \
+                "join DiscordRedditUser DR on DR.RedditId =R.Id " \
+                "join DiscordUsers M on M.Id = DR.DiscordId "\
+                f"where lower(M.Name) = '{sCommand}' and ML.Date > DATE(Date(),'-1 months') "\
                 "and (ML.Action like 'remove%') "\
                 "group by dia)H group by dia order by dia"
     sRet = CreateLinePlot(sQuery,pltName, 'Dia', 'Cantidad de Acciones', 'Acciones por Dia', False, lineLabel = "Removidos",fill = True,isXDateFormat="%Y-%m-%d")
@@ -521,6 +481,7 @@ def GetModMonthLog(sCommand, pltName, lineLabel = '', new = True):
     plt.savefig(pltName)
     return sRet
 def GetModHourLog(sCommand, pltName, ModId, lineLabel = '', new = True):
+    sCommand = sCommand.lower().replace('_', '\_')
     sQuery = "select ifnull(counts.Cantidad,0) , cnt.x  "\
             "from   "\
             "( "\
@@ -531,17 +492,19 @@ def GetModHourLog(sCommand, pltName, ModId, lineLabel = '', new = True):
             ") as cnt  "\
             "left join   "\
             "(select sum(Cantidad) as Cantidad, Hora From( "\
-            f"	select count(1) as Cantidad,cast(strftime(\"%H\", DATETIME(DATETIME(a.Date,'-'||(select Value from Settings where [Key]= 'HusoHorarioDB')||' hours' ), (select TimeZone from Moderators where Id = {ModId})|| ' hours')) as INTEGER) as Hora  "\
+            f"	select count(1) as Cantidad,cast(strftime(\"%H\", DATETIME(DATETIME(a.Date,'-'||(select Value from Settings where [Key]= 'HusoHorarioDB')||' hours' ), (select TimeZone from DiscordUsers where Id = {ModId})|| ' hours')) as INTEGER) as Hora  "\
             "	from Actions A  "\
-            "	join Moderators M on M.Id = A.Mod  "\
-            f"	where lower(M.name) = '{sCommand.lower()}' and a.Date > DATE(Date(),'-1 years')  "\
+            "	join DiscordUsers M on M.Id = A.Mod  "\
+            f"	where lower(M.name) = '{sCommand}' and a.Date > DATE(Date(),'-1 years')  "\
             "	group by Hora "\
             "	union  "\
             "	select count(1) as Cantidad,  "\
-            "	cast(strftime(\"%H\", DATETIME(ML.Date, (select TimeZone from Moderators where Id = 1)|| ' hours')) as INTEGER) as Hora  "\
+            "	cast(strftime(\"%H\", DATETIME(ML.Date, (select TimeZone from DiscordUsers where Id = 1)|| ' hours')) as INTEGER) as Hora  "\
             "	from ModLog ML "\
-            "   join Moderators M on lower(M.redditname) = lower(ML.ModName) "\
-            f"	where lower(M.Name) = '{sCommand.lower()}' and ML.Date > DATE(Date(),'-1 years')  "\
+            "join RedditUsers R on lower(R.redditname) = lower(ML.ModName) " \
+            "join DiscordRedditUser DR on DR.RedditId =R.Id " \
+            "join DiscordUsers M on M.Id = DR.DiscordId "\
+            f"	where lower(M.Name) = '{sCommand}' and ML.Date > DATE(Date(),'-1 years')  "\
             "	and (ML.Action like 'approve%' or ML.Action like 'remove%') "\
             "	group by Hora) H group by Hora "\
             ") counts on counts.Hora = cnt.x"
@@ -602,21 +565,39 @@ async def HandleIndUserStats(reddit, sCommand):
         f"**Posts**\n---**Cantidad:** {PostCount}\n---**Karma: **{PostKarma}\n---**Porcentaje de removidos:** {'{0:.3g}'.format(PostPercRemoved)}%\n"\
         f"**Submissiones promedio por dia:** {'{0:.3g}'.format(subsPerDay)}"))    
     return MsgsRetu
+def GetActingMods(TimeBack):
+    sQuery = "select Name from( " \
+            "select M.Name, min(A.Date) as Date " \
+            "from Actions A " \
+            "join DiscordUsers M on M.ID = a.Mod " \
+            f"where datetime(a.Date) >=datetime('now', '{TimeBack}') " \
+            "group by M.Name " \
+            "UNION " \
+            "select D.Name, min(Date) as Date " \
+            "from ModLog ML " \
+            "join RedditUsers R on r.RedditName = ML.ModName " \
+            "join DiscordRedditUser DR on DR.RedditId = R.Id " \
+            "join DiscordUsers D on D.ID = DR.DiscordId " \
+            f"where datetime(Date) >=datetime('now', '{TimeBack}') " \
+            "and (action like 'approve%' or action like 'remove%') " \
+            "group by D.Name)A group by Name order by min(Date)"
+    return DB.ExecuteDB(sQuery)
+
 def HandleSubStats(sCommand, ModId):
     sRetu = [Message(False,False,MessageType.Text,f"**Modmail**\n" + DB.GetTable(f"select a1.Enviados, a2.Respondidos, printf(\"%.2f\",(100.00*a2.Respondidos)/a1.Enviados) as PorcentajeRespondidos from (select count(1) as Enviados,'a' as a from actions where Modmailid is not null) a1 join (select count(1) as Respondidos ,'a' as a from actions where lastmodmailupdated  is not null) a2 on a1.a = a2.a"))]
     sRetu.append(Message(False,False,MessageType.Text, f"**Cantidad de Acciones tomadas**\n" + DB.GetTable(f"select AT.Description as Descripcion, count(1) as Cantidad from Actions A join ActionType AT on AT.Id = A.ActionType group by AT.Description order by Cantidad desc")))
     #sRetu.append(Message(False,False,MessageType.Text, f"**Acciones por dia de la semana**\n" + DB.GetTable("select case DDW when '0' then 'Domingo' when '1' then 'Lunes' when '2' then 'Martes' when '3' then 'Miercoles' when '4' then 'Jueves' when '5' then 'Viernes' when '6' then 'Sabado' end as DiaDeLaSemana, Cantidad from (SELECT strftime('%w',Date) DDW, count(1) as Cantidad from actions group by DDW)") + "\n"))
     
     
-    plot = CreateLinePlot(f"select count(1) as 'cnt', strftime(\"%m-%Y\", a.Date) as 'mes' from Actions A where a.Date > DATE(Date(),'-1 years') group by strftime(\"%m-%Y\", a.Date)",'plot.png', 'Mes', 'Cantidad de Medidas', 'Medidas por Mes')
+    plot = CreateLinePlot(f"select count(1) as 'cnt', strftime(\"%Y-%m\", a.Date) as 'mes' from Actions A where a.Date > DATE(Date(),'-1 years') group by strftime(\"%Y-%m\", a.Date)",'plot.png', 'Mes', 'Cantidad de Medidas', 'Medidas por Mes')
     if len(plot) > 0:
         sRetu.append(Message(False,False,MessageType.Image,plot))
 
-    plot = CreateLinePlot(f"select count(1) as 'cnt', strftime(\"%m-%Y\", a.Date) as 'mes' from Actions A join ActionType AT on AT.Id = A.ActionType where AT.Weight > 0 and a.Date > DATE(Date(),'-1 years') group by strftime(\"%m-%Y\", a.Date)",'plotp.png', 'Mes', 'Cantidad de Medidas', 'Medidas punitivas por Mes')
+    plot = CreateLinePlot(f"select count(1) as 'cnt', strftime(\"%Y-%m\", a.Date) as 'mes' from Actions A join ActionType AT on AT.Id = A.ActionType where AT.Weight > 0 and a.Date > DATE(Date(),'-1 years') group by strftime(\"%Y-%m\", a.Date)",'plotp.png', 'Mes', 'Cantidad de Medidas', 'Medidas punitivas por Mes')
     if len(plot) > 0:
         sRetu.append(Message(False,False,MessageType.Image,plot))
 
-    rows = DB.ExecuteDB("SELECT Name FROM Moderators")
+    rows = GetActingMods('-1 years')
     plt.clf()
     for row in rows:
         plot = GetModYearLog(row[0],'ploty.png',row[0], False)
@@ -634,13 +615,13 @@ def HandleSubStats(sCommand, ModId):
             "left join   "\
             "	(select sum(Cantidad) as Cantidad, Hora From "\
             "		(select count(1) as Cantidad, "\
-            f"		cast(strftime(\"%H\", DATETIME(DATETIME(a.Date,'-'||(select Value from Settings where [Key]= 'HusoHorarioDB')||' hours' ), (select TimeZone from Moderators where Id = {ModId})|| ' hours')) as INTEGER) as Hora  "\
-            "		from Actions  "\
-            "		A Join Moderators M on M.Id = A.Mod  "\
-            "		where M.Active = 1 group by Hora "\
+            f"		cast(strftime(\"%H\", DATETIME(DATETIME(a.Date,'-'||(select Value from Settings where [Key]= 'HusoHorarioDB')||' hours' ), (select TimeZone from DiscordUsers where Id = {ModId})|| ' hours')) as INTEGER) as Hora  "\
+            "		from Actions A "\
+            "		Join DiscordUsers M on M.Id = A.Mod  Join UserRoles UR on UR.DiscordId = M.Id join Roles R on R.Id = UR.RoleId "\
+            "		where R.Name = 'Reddit Mod' group by Hora "\
             "		union  "\
             "		select count(1) as Cantidad,  "\
-            f"		cast(strftime(\"%H\", DATETIME(DATETIME(ML.Date,'-'||(select Value from Settings where [Key]= 'HusoHorarioDB')||' hours' ), (select TimeZone from Moderators where Id = {ModId})|| ' hours')) as INTEGER) as Hora  "\
+            f"		cast(strftime(\"%H\", DATETIME(DATETIME(ML.Date,'-'||(select Value from Settings where [Key]= 'HusoHorarioDB')||' hours' ), (select TimeZone from DiscordUsers where Id = {ModId})|| ' hours')) as INTEGER) as Hora  "\
             "		from ModLog ML "\
             "		Where ML.Date > DATE(Date(),'-1 years')  "\
             "		and (ML.Action like 'approve%' or ML.Action like 'remove%') "\
@@ -651,20 +632,26 @@ def HandleSubStats(sCommand, ModId):
         sRetu.append(Message(False,False,MessageType.Image,plot))
     
     plt.clf()
-    rows = DB.ExecuteDB("SELECT Name FROM Moderators where Active = 1")
+    rows = GetActingMods('-1 years')
     for row in rows:
         plot = GetModHourLog(row[0],'plotm.png', ModId,row[0], False)
     if len(plot) > 0:
         sRetu.append(Message(False,False,MessageType.Image,plot))
     
     return sRetu
-def HandlePolicies(sCommand):
+def HandlePolicies(sCommand, UserRoles):
     if sCommand.lower().startswith('list'):
         return GetPolicies()
     if sCommand.lower().startswith('edit '):
-        return EditPol(sCommand[4:].strip(' '))
+        if 'Bot Config' in UserRoles: 
+            return EditPol(sCommand[4:].strip(' '))
+        else:
+            return [Message(False,False,MessageType.Text,"Se requiere del rol Bot Config para modificar politicas.")]
     if sCommand.lower().startswith('remove '):
-        return RemovePol(sCommand[7:].strip(' '))
+        if 'Bot Config' in UserRoles: 
+            return RemovePol(sCommand[7:].strip(' '))
+        else:
+            return [Message(False,False,MessageType.Text,"Se requiere del rol Bot Config para eliminar politicas.")]
     else:
         return [Message(False,False,MessageType.Text,"policies list - Muestra un listado de las politicas de moderacion\npolicies remove <id> - Elimina una politica de moderacion\npolicies edit <id(entero, si esta vacio es un nuevo registro)>,<From(entero)>,<To(entero)>,<Action(warn/ban)>,<BanDays(entero, si esta vacio es permanente)>,<Message(modmail)> - Agrega o edita una politica de moderacion")]
 def EditPol(sCommand):
@@ -735,22 +722,37 @@ async def ApproveUser(sUser, reddit):
     sub = await reddit.subreddit(DB.GetSetting("subreddit"))
     await sub.contributor.add(sUser)
     return [Message(False,False,MessageType.Text,f"Usuario {sUser} ha sido agregado a users aprobados.")]
-def HandleMods(sCommand):
+def HandleUsers(sCommand, UserRoles):
     if sCommand.lower().startswith('list'):
-        return GetMods()
-    if sCommand.lower().startswith('add '):
-        return AddMod(sCommand[4:].strip(' '))
-    if sCommand.lower().startswith('remove '):
-        return RemoveMod(sCommand[7:].strip(' '))
+        return GetUsers()
+    elif sCommand.lower().startswith('search '):
+        return SearchUser(sCommand[7:].strip(' '))
+    elif sCommand.lower().startswith('addrole '):
+        if 'Bot Config' in UserRoles or 'Admin' in UserRoles: 
+            return AddRole(sCommand[8:].strip(' '),UserRoles)
+        else:
+            return [Message(False,False,MessageType.Text,"Se requiere del rol Bot Config para agregar roles a usuarios.")]
+    if sCommand.lower().startswith('removerole '):
+        if 'Bot Config' in UserRoles or 'Admin' in UserRoles: 
+            return RemoveRole(sCommand[11:].strip(' '),UserRoles)
+        else:
+            return [Message(False,False,MessageType.Text,"Se requiere del rol Bot Config para remover roles de usuarios.")]
+    if sCommand.lower().startswith('details '):
+        return GetUserDetails(sCommand[8:].strip(' '))
     else:
-        return [Message(False,False,MessageType.Text,"mods list - Muestra un listado de los moderadores\nmods add <nombre>,<nombre en reddit>,<ID de discord (numerico)> <Huso horario (numerico)> - Agrega un moderador\nmods remove <id> - Elimina un moderador por ID")]
-def HandleSettings(sCommand):
+        return [Message(False,False,MessageType.Text,"users list - Muestra un listado de los usuarios autorizados para usar el bot\nusers search <Usuario> - Busca usuarios entre todos los usuarios registrados\nusers details <Usuario> - Muestra los detalles del usuario\nusers addrole <Usuario> <Rol> - Agrega un rol a un usuario\nusers removerole <Usuario> <Rol> - Remueve un rol a un usuario")]
+def HandleSettings(sCommand, UserRoles):
     if sCommand.lower().startswith('list'):
         return GetSettings()
     if sCommand.lower().startswith('edit '):
-        return EditSetting(sCommand[5:].strip(' '))
+        if 'Bot Config' in UserRoles: 
+            return EditSetting(sCommand[5:].strip(' '))
+        else:
+            return [Message(False,False,MessageType.Text,"Se requiere del rol Bot Config para editar las preferencias del bot.")]
     else:
         return [Message(False,False,MessageType.Text,"settings list - Muestra un listado de preferencias\nsettings edit <setting> <value> - Edita una preferencia")]
+def HandleRoles(sCommand):
+    return GetRoles()
 def EditSetting(sCommand):
     chunks = sCommand.split(' ')
     if len(chunks) < 2:
@@ -764,43 +766,104 @@ def EditSetting(sCommand):
             return [Message(False,False,MessageType.Text,f"La preferencia {chunks[0]} debe ser un numero entero")]
     DB.WriteDB(f"UPDATE Settings SET [Value] = '{sValue}' WHERE Id = {rows[0][0]};")
     return [Message(False,False,MessageType.Text,f"La preferencia {chunks[0]} ha sido actualizada")]
-
+def AddRole(sCommand,UserRoles):
+    chunks = sCommand.lower().split(' ')
+    sRole = sCommand[len(chunks[0]):].strip(' ').lower()
+    if sRole == 'Admin' and 'Admin' not in UserRoles:
+        return [Message(False,False,MessageType.Text,"Se requiere del rol Admin para agregar este rol.")]
+    if len(chunks) < 2:
+        return [Message(False,False,MessageType.Text,"Formato incorrecto, por favor asegurate de que todos los campos esten completados correctamente:\nusers addrole <User> <Role>")]
+    sUser = chunks[0].strip(' ').lower()
+    if sUser.startswith("<@!") and sUser.endswith(">"):
+        UserId = DB.GetDBValue(f"SELECT Id FROM DiscordUsers where DiscordId = {sUser[3:-1]}")
+    else:
+        UserId = DB.GetDBValue(f"SELECT Id FROM DiscordUsers where lower(Name) = '{sUser}'")
+    if UserId is None:
+        return [Message(False,False,MessageType.Text,"Usuario no encontrado")]
+    RoleId = DB.GetDBValue(f"SELECT Id FROM Roles where lower(Name) = '{sRole}'")
+    if RoleId is None:
+        return [Message(False,False,MessageType.Text,"Rol no encontrado")]
+    URId = DB.GetDBValue(f"SELECT Id FROM UserRoles where DiscordId = {UserId} and RoleId = {RoleId}")
+    if URId is not None:
+        return [Message(False,False,MessageType.Text,"El usuario ya tiene ese rol")]
+    DB.WriteDB(f"Insert into UserRoles(DiscordId, RoleId) values ({UserId},{RoleId});")
+    return [Message(False,False,MessageType.Text,f"El usuario {sUser} ha sido agregado al rol {sRole}")]
 def check_int(s):
     if s is not None and len(str(s)) > 0:
         if str(s)[0] in ('-', '+'):
             return str(s)[1:].isdigit()
         return str(s).isdigit()
     return 0
-
-def AddMod(sCommand):
-    sParams = sCommand.split(',')
-    if len(sParams) == 4:
-        if sParams[2].strip(' ').isnumeric() and sParams[3].strip(' ').isnumeric() and len(sParams[0].strip(' ')) > 0 and len(sParams[1].strip(' ')) > 0:
-            row = (sParams[0].strip(' '),sParams[1].strip(' '),sParams[2].strip(' '), sParams[3].strip(' '))
-            DB.WriteDB(f"""INSERT INTO Moderators (Name, RedditName, DiscordID, TimeZone, Active) VALUES (?,?,?,?,1);""",row)
-            return [Message(False,False,MessageType.Text,f"{sParams[0]} fue agregado a la lista de moderadores")]
-    return [Message(False,False,MessageType.Text,"Formato incorrecto, por favor asegurate de que todos los campos esten completados correctamente:\n<nombre>,<nombre en reddit>,<ID de discord (numerico)>, <Huso Horario (numerico)>")]
-
-def RemoveMod(sId):
-    if not check_int(sId):
-        return [Message(False,False,MessageType.Text,"Id Incorrecto")]
-    iId = int(sId)
-    rows = DB.ExecuteDB(f"SELECT IsAdmin FROM Moderators where Id = {iId}")
-    if len(rows) > 0:
-        if(rows[0][0] == 1):
-            return [Message(False,False,MessageType.Text,"No podes remover a un administrador")]
-        DB.WriteDB(f"Update Moderators set Active = false WHERE Id = {iId}")
-        return [Message(False,False,MessageType.Text,f"Moderador #{iId} eliminado.")]
-    return [Message(False,False,MessageType.Text,f"Moderador #{iId} no encontrado.")]
-
-def GetMods():
-    return [Message(False,False,MessageType.Text,DB.GetTable("SELECT Id, Name, RedditName, DiscordID, Active FROM Moderators"))]
-
+def RemoveRole(sCommand,UserRoles):
+    chunks = sCommand.lower().split(' ')
+    sRole = sCommand[len(chunks[0]):].strip(' ').lower()
+    if sRole == 'Admin' and 'Admin' not in UserRoles:
+        return [Message(False,False,MessageType.Text,"Se requiere del rol Admin para quitar este rol.")]
+    if len(chunks) < 2:
+        return [Message(False,False,MessageType.Text,"Formato incorrecto, por favor asegurate de que todos los campos esten completados correctamente:\nusers removerole <User> <Role>")]
+    sUser = chunks[0].strip(' ').lower()
+    if sUser.startswith("<@!") and sUser.endswith(">"):
+        UserId = DB.GetDBValue(f"SELECT Id FROM DiscordUsers where DiscordId = {sUser[3:-1]}")
+    else:
+        UserId = DB.GetDBValue(f"SELECT Id FROM DiscordUsers where lower(Name) = '{sUser}'")
+    if UserId is None:
+        return [Message(False,False,MessageType.Text,"Usuario no encontrado")]
+    RoleId = DB.GetDBValue(f"SELECT Id FROM Roles where lower(Name) = '{sRole}'")
+    if RoleId is None:
+        return [Message(False,False,MessageType.Text,"Rol no encontrado")]
+    URId = DB.GetDBValue(f"SELECT Id FROM UserRoles where DiscordId = {UserId} and RoleId = {RoleId}")
+    if URId is None:
+        return [Message(False,False,MessageType.Text,"El usuario no pertenece a ese rol")]
+    DB.WriteDB(f"DELETE FROM UserRoles WHERE Id = {URId}")
+    return [Message(False,False,MessageType.Text,f"El usuario {sUser} ha sido removido del rol {sRole}")]
+def GetUserDetails(sCommand):
+    DiscordUsers = DB.ExecuteDB(f"Select D.* from DiscordUsers D Join UserRoles UR on UR.DiscordId = D.Id Join Roles RL on RL.Id = UR.RoleId where lower(D.Name) = '{sCommand.lower().strip(' ')}' and RL.Name = 'Bot User'")
+    if len(DiscordUsers) > 0:
+        DiscordUser = DiscordUsers[0]
+        sRetu = f"**{DiscordUser[1]}**\nDiscord Id: {DiscordUser[2]}\nTime Zone: {DiscordUser[3]}\nRoles:\n"
+        Roles = DB.ExecuteDB("select R.Name " \
+                    "from UserRoles UR " \
+                    "join DiscordUsers D on D.Id = UR.DiscordId " \
+                    "join Roles R on R.Id = UR.RoleId " \
+                    f"where D.Id = {DiscordUser[0]} ")
+        for Role in Roles:
+            sRetu = f"{sRetu}\t{Role[0]}\n"
+        RedditUsers = DB.ExecuteDB("Select R.* " \
+	                                "from DiscordRedditUser DR " \
+	                                "Join RedditUsers R on R.Id = DR.RedditId "\
+	                                f"where DR.DiscordId = {DiscordUser[0]}")
+        sRetu = f"{sRetu}Linked Reddit Users:\n"
+        for RedditUser in RedditUsers:
+            sRetu = f"{sRetu}\tUser: {RedditUser[1]}\n\tCake Day: {RedditUser[2]}\n"
+        return [Message(False,False,MessageType.Text,sRetu)]
+    return [Message(False,False,MessageType.Text,f"Usuario no encontrado")]
+def GetUsers():
+    return [Message(False,False,MessageType.Text,DB.GetTable("Select D.Name, D.DiscordId, R.RedditName " \
+                                                            "from DiscordUsers D " \
+                                                            "Join UserRoles UR on UR.DiscordId = D.Id " \
+                                                            "Join Roles RL on RL.Id = UR.RoleId " \
+                                                            "left join DiscordRedditUser DR on DR.DiscordId = D.Id " \
+                                                            "left join RedditUsers R on R.Id = DR.RedditId " \
+                                                            "Where RL.Name = 'Bot User'"))]
+def SearchUser(sIn):
+    sUser = sIn.strip(' ').lower()
+    return [Message(False,False,MessageType.Text,DB.GetTable("Select D.Name, D.DiscordId, R.RedditName " \
+                                                            "from DiscordUsers D " \
+                                                            "left join DiscordRedditUser DR on DR.DiscordId = D.Id " \
+                                                            "left join RedditUsers R on R.Id = DR.RedditId " \
+                                                            f"Where lower(D.Name) like '%{sUser}%' or lower(R.RedditName) like '%{sUser}%'"))]
 def GetSettings():
     rows = DB.ExecuteDB(f"SELECT * FROM Settings")
     sRetu = ""
     for row in rows:
         sRetu = sRetu + f"Setting: {row[1]}\nValue: {row[2]}\n--------------------\n"
+    return [Message(False,False,MessageType.Text,sRetu)]
+
+def GetRoles():
+    rows = DB.ExecuteDB(f"SELECT * FROM Roles")
+    sRetu = ""
+    for row in rows:
+        sRetu = sRetu + f"Id: {row[0]}\nRole: {row[1]}\n--------------------\n"
     return [Message(False,False,MessageType.Text,sRetu)]
 
 def Unwarn(sId):
@@ -843,7 +906,7 @@ def GetWarnsUserReport(sUser, msgLen):
     dateFrom = datetime.now() - timedelta(days=int(DB.GetSetting("warnexpires")))
     iWeight = 0
     for row in rows:
-        if datetime.strptime(row['Date'], '%Y-%m-%d %H:%M:%S.%f') >= dateFrom and row['Weight'] > 0:
+        if datetime.strptime(row['Date'], '%Y-%m-%d %H:%M:%S.%f') >= dateFrom and ifnull(row['Weight'],0) > 0:
             sRetu = sRetu + f"{row['Date'].split(' ')[0]}\t[{row['TypeDesc']}](https://{row['Link']})\tPuntos: {row['Weight']}\n\n"
             iWeight += row['Weight']
     sRetu = sRetu.rstrip("\n") + f" **<-- Nueva Falta**\n\n**Total**: {iWeight}"
@@ -851,15 +914,19 @@ def GetWarnsUserReport(sUser, msgLen):
         sRetu = sRetu[sRetu.find("\n") + 2:]
     return sRetu
 def CheckSender(author):
-    rows = DB.ExecuteDB(f"SELECT Id FROM Moderators WHERE DiscordID = {author.id} and Active = true")
-    if len(rows) <= 0:
-        return {'modID': '0', 'status': '0'} #not valid 
-    modId = rows[0][0]
-    rows = DB.ExecuteDB(f"SELECT Id FROM Actions WHERE Mod = {modId} and ActionType is null")
-    if len(rows) <= 0:
-        return {'modID': modId, 'status': 0} #nothing pending
-    else:
-        return {'modID': modId, 'status': rows[0][0]} # Pending resolution
+    mRoles = DB.ExecuteDB("select R.Name " \
+                        "from UserRoles UR " \
+                        "join DiscordUsers D on D.Id = UR.DiscordId " \
+                        "join Roles R on R.Id = UR.RoleId " \
+                        f"where D.DiscordId = {author.id} ")
+    Roles = []
+    for Role in mRoles:
+        Roles.append(Role[0])
+    Id = DB.GetDBValue(f"select Id from DiscordUsers where DiscordId = {author.id}")
+    PendingAction = None
+    if Id is not None:
+        PendingAction = DB.GetDBValue(f"SELECT Id FROM Actions WHERE Mod = {Id} and ActionType is null and Processing is null")
+    return UserStatus(Id, Roles, PendingAction)
 
 def GetActionTypes(UserName, filter = "", FormatTable = False):
     sRetu = ""
@@ -910,17 +977,20 @@ def GetApplyingPolicy(ActionId, AddedWeight):
     return  {'Action':0, 'BanDays': '0', 'Message':'0'}
 
 async def CreateModMail(sMessage, Link, ActionDesc, Details, sUser, reddit):
-    sMessage = sMessage.replace("[Sub]", DB.GetSetting("subreddit"))
-    sMessage = sMessage.replace("[Link]", f"https://{Link}")
-    sMessage = sMessage.replace("[ActionTypeDesc]", ActionDesc)
-    sMessage = sMessage.replace("[Details]", Details.replace("\n",">\n"))
-    if "[Consultas]" in sMessage:
-        sConsultas = await GetLastConsultasThread(reddit)
-        sMessage = sMessage.replace("[Consultas]", sConsultas)
-    if "[Summary]" in sMessage:
-        sMessage = sMessage.replace("[Summary]", GetWarnsUserReport(sUser,1000- (len(sMessage) - len("[Summary]"))))
-    sMessage = sMessage.replace("\\n", "\n")
-    return sMessage[:1000]
+    try:
+        sMessage = sMessage.replace("[Sub]", DB.GetSetting("subreddit"))
+        sMessage = sMessage.replace("[Link]", f"https://{Link}")
+        sMessage = sMessage.replace("[ActionTypeDesc]", ActionDesc)
+        sMessage = sMessage.replace("[Details]", Details.replace("\n",">\n"))
+        if "[Consultas]" in sMessage:
+            sConsultas = await GetLastConsultasThread(reddit)
+            sMessage = sMessage.replace("[Consultas]", sConsultas)
+        if "[Summary]" in sMessage:
+            sMessage = sMessage.replace("[Summary]", GetWarnsUserReport(sUser,1000- (len(sMessage) - len("[Summary]"))))
+        sMessage = sMessage.replace("\\n", "\n")
+        return sMessage[:1000]
+    except:
+        raise
 async def GetLastConsultasThread(reddit):
     List = ""
     sub = await reddit.subreddit(DB.GetSetting("subreddit"))
@@ -939,8 +1009,12 @@ async def ResolveAction(sIn, ActionId, reddit):
         ApplyingPol = GetApplyingPolicy(ActionId, Weight)
         if ApplyingPol['Action'] > 0:
             try:
+                #Mark action as processing
+                DB.WriteDB(f"Update Actions set Processing = 1 where Id = {ActionId}")
                 preparedAction = await ExecuteAction(reddit,Input['Id'],Input['Description'],ActionId,ApplyingPol['Message'])
-            except:
+            except Exception as err:
+                #unmark processing
+                DB.WriteDB(f"Update Actions set Processing = null where Id = {ActionId}")
                 return [Message(False,False,MessageType.Text,f"Ocurrio un error al intentar borrar el post: {sys.exc_info()[1]}")]
             ActionDetailRow = preparedAction["ActionDetailRow"]
             modmail = preparedAction["ModMail"]
@@ -978,34 +1052,37 @@ async def ResolveAction(sIn, ActionId, reddit):
 def UpdateModmailId(modmailId, ActionId):
     DB.WriteDB(f"UPDATE Actions SET modmailID = '{modmailId}' WHERE Id = {ActionId};")
 async def ExecuteAction(reddit, InputId, InputDesc, ActionId, Message):
-    ActionDetailRow = GetActionDetail('', ActionId,'')[0]
-    LinkType = GetLinkType(f"https://{ActionDetailRow['Link']}")
-    snapshot = None
-    if LinkType == 1:
-        submission = asyncpraw.models.Submission(reddit,url = f"https://{ActionDetailRow['Link']}")
-        await submission.load()
-    elif LinkType == 2:
-        submission = asyncpraw.models.Comment(reddit,url = f"https://{ActionDetailRow['Link']}")
-        await submission.load()
-        AuxSubmission = submission
-        snapshot = ""
-        while type(AuxSubmission) == asyncpraw.models.reddit.comment.Comment:
-            snapshot = f"[{datetime.fromtimestamp(AuxSubmission.created_utc).strftime('%Y-%m-%d %H:%M:%S')}] {GetAuthorName(AuxSubmission)}:\r\n\t{AuxSubmission.body}\r\n{snapshot}"
-            AuxSubmission = await AuxSubmission.parent()
-            await AuxSubmission.load()
-    if LinkType != 0:
-        await RemoveSubAndChildren(submission)
-    UpdateQuery = f"UPDATE Actions SET ActionType = ?, Description = ?"
-    if snapshot is not None:
-        UpdateQuery = f"{UpdateQuery}, Snapshot = ?"
-        params = (InputId,InputDesc,snapshot,ActionId)
-    else:
-        params = (InputId,InputDesc,ActionId)
-    UpdateQuery = f"{UpdateQuery} WHERE Id = ?;"
-    DB.WriteDB(UpdateQuery, params)
-    ActionDetailRow = GetActionDetail('', ActionId,'')[0]
-    modmail = await CreateModMail(Message, ActionDetailRow['Link'],ActionDetailRow['TypeDesc'],ActionDetailRow['Details'],ActionDetailRow['User'], reddit)
-    return {'ActionDetailRow': ActionDetailRow, 'ModMail': modmail}
+    try:
+        ActionDetailRow = GetActionDetail('', ActionId,'')[0]
+        LinkType = GetLinkType(f"https://{ActionDetailRow['Link']}")
+        snapshot = None
+        if LinkType == 1:
+            submission = asyncpraw.models.Submission(reddit,url = f"https://{ActionDetailRow['Link']}")
+            await submission.load()
+        elif LinkType == 2:
+            submission = asyncpraw.models.Comment(reddit,url = f"https://{ActionDetailRow['Link']}")
+            await submission.load()
+            AuxSubmission = submission
+            snapshot = ""
+            while type(AuxSubmission) == asyncpraw.models.reddit.comment.Comment:
+                snapshot = f"[{datetime.fromtimestamp(AuxSubmission.created_utc).strftime('%Y-%m-%d %H:%M:%S')}] {GetAuthorName(AuxSubmission)}:\r\n\t{AuxSubmission.body}\r\n{snapshot}"
+                AuxSubmission = await AuxSubmission.parent()
+                await AuxSubmission.load()
+        if LinkType != 0:
+            await RemoveSubAndChildren(submission)
+        UpdateQuery = f"UPDATE Actions SET Processing = null, ActionType = ?, Description = ?"
+        if snapshot is not None:
+            UpdateQuery = f"{UpdateQuery}, Snapshot = ?"
+            params = (InputId,InputDesc,snapshot,ActionId)
+        else:
+            params = (InputId,InputDesc,ActionId)
+        UpdateQuery = f"{UpdateQuery} WHERE Id = ?;"
+        DB.WriteDB(UpdateQuery, params)
+        ActionDetailRow = GetActionDetail('', ActionId,'')[0]
+        modmail = await CreateModMail(Message, ActionDetailRow['Link'],ActionDetailRow['TypeDesc'],ActionDetailRow['Details'],ActionDetailRow['User'], reddit)
+        return {'ActionDetailRow': ActionDetailRow, 'ModMail': modmail}
+    except Exception as err:
+        raise 
 async def RemoveSubAndChildren(submission):
     if type(submission) == asyncpraw.models.reddit.comment.Comment:
         await submission.refresh()
@@ -1033,7 +1110,7 @@ def GetAuthorName(submission):
         return submission.author.name
     return "[Usuario Eliminado]"
 def GetActionDetail(Link, ActionId, User):
-    sQuery = f"SELECT ifnull(m.RedditName,'Deleted Mod Id ' + a.Mod), ifnull(t.Description,'Deleted Reason Id ' + a.ActionType), ifnull(NULLIF(a.Description, ''), ifnull(t.DefaultMessage,'')), a.Date, a.Link, a.User, a.Id, t.Weight,  '<@' ||  m.DiscordID ||  '>', a.Snapshot FROM Actions a left join Moderators m on m.Id = a.Mod left join ActionType t on t.Id = a.ActionType "
+    sQuery = f"SELECT m.Name, ifnull(t.Description,'Deleted Reason Id ' + a.ActionType), ifnull(NULLIF(a.Description, ''), ifnull(t.DefaultMessage,'')), a.Date, a.Link, a.User, a.Id, t.Weight,  '<@' ||  m.DiscordID ||  '>', a.Snapshot FROM Actions a left join DiscordUsers m on m.Id = a.Mod left join ActionType t on t.Id = a.ActionType "
     if ActionId > 0:
         sQuery = sQuery + f"WHERE a.Id = '{ActionId}'"
     elif len(Link) > 0:
@@ -1076,7 +1153,7 @@ async def InitAction(Link, reddit, SenderAction):
                         submission.mod.remove()
                     msgRetu = [Message(False,False,MessageType.Text,f"El usuario elimino su cuenta, no se sancionara al usuario pero el contenido sera eliminado")]
                 else:
-                    row = (AuthorName, SanatizeRedditLink(Link), SenderAction['modID'],datetime.now() )
+                    row = (AuthorName, SanatizeRedditLink(Link), SenderAction.Id,datetime.now() )
                     msgRetu = GetWarns(AuthorName, True)
                     DB.WriteDB("""INSERT INTO Actions (User, Link, Mod, Date) VALUES (?,?,?,?);""", row)
                     msgRetu.append(Message(False,False,MessageType.Text,f"Selecciona un motivo #<Id>, <Descripcion (Opcional)> \n{GetActionTypes(AuthorName)}\nUndo - Deshacer warn."))

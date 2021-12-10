@@ -59,7 +59,7 @@ async def PostSchedPost(DB, reddit, subreddit, schedPost):
         await post.mod.suggested_sort(schedPost.Sort)
         if schedPost.TimeLenght > 0:
             await post.mod.sticky(bottom=schedPost.StickyPos == 2)
-            await VerifyUnstickyReplace(reddit)
+            await VerifyUnstickyReplace(DB, reddit)
         row = (schedPost.Id,datetime.utcfromtimestamp(post.created_utc).strftime('%Y-%m-%d %H:%M:%S.%f'),post.id, schedPost.TimeLenght > 0)
         await SaveSchedPost(DB, row)
         return True
@@ -68,3 +68,14 @@ async def PostSchedPost(DB, reddit, subreddit, schedPost):
         return False
 async def SaveSchedPost(DB, row):
     DB.WriteDB("""INSERT INTO ScheduledPosts (RedditID,PostedDate, PostID, IsStickied) VALUES (?,?,?,?);""", row)
+async def VerifyUnstickyReplace(DB, reddit):
+    StickiedPosts = DB.ExecuteDB("select PostID from ScheduledPosts where IsStickied = 1")
+    for postID in StickiedPosts:
+        Post = await reddit.submission(postID[0])
+        if Post.stickied == False:
+            DB.WriteDB(f"Update ScheduledPosts set IsStickied = false where PostID = '{postID[0]}'")
+            Log(f"Post ID: {postID[0]} - Sticky was replaced.",bcolors.OKCYAN,logging.INFO)
+def ifnull(var, val):
+  if var is None:
+    return val
+  return var
