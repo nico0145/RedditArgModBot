@@ -7,20 +7,16 @@ import asyncio
 import threading
 from prawcore.exceptions import OAuthException, ResponseException
 from dotenv import load_dotenv
+import dotenv
 from Reddit import get_reddit_object
-from datetime import datetime
-from datetime import timedelta, date
+from datetime import timedelta, date, datetime
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from dateutil.relativedelta import *
-from DBHandle import *
-from DiscordHandle import *
-from StaticHelpers import *
-class UserStatus:
-    def __init__(self,Id, Roles, PendingAction):
-        self.Id = Id
-        self.Roles = Roles
-        self.PendingAction = PendingAction
+from py.DBHandle import *
+from py.DiscordHandle import *
+from py.StaticHelpers import *
+
 class UserSubmission:
     def __init__(self,Type, created_utc, score, removed):
         self.Type = Type
@@ -34,56 +30,71 @@ client = discord.Client()
 DB = DBHandle(os.getenv('DB'))
 reddit = None
 async def CheckModmail():
+    modmails = [LastModmailChecked(sSub.lower(),"") for sSub in DB.GetSetting("subreddit")]
     while True:
         try:
+            for modmailbox in modmails:
+                asyncio.Task(CheckModmailBox(modmailbox))
             seconds = int(DB.GetSetting("RefreshModMail"))
             if seconds > 0:
                 await asyncio.sleep(seconds)
-            #get all new modmails
-            #search for their IDs on DB where  db.modmailID = ID and db.LastUpdated < last_user_update
-            #foreach
-            #   send discord message @discordmod with the mod mail link and the reddit message/post link
-            #   update db record LastUpdated =  last_user_update
-            #unreadMail = await reddit.subreddit(DB.GetSetting("subreddit")).modmail.conversations(sort="unread")
-            sQuery = ""
-            #print(f"Unread Mail:\n")
-            sub = await reddit.subreddit(DB.GetSetting("subreddit"))
-            async for mail in sub.modmail.conversations(sort="unread"):
-                #print(f"Mail Id: {mail.id}\tLast User Update: {mail.last_user_update}\n")
-                if mail.last_user_update is not None and mail.last_mod_update is not None and mail.last_mod_update >= mail.last_user_update:
-                    await mail.read()
-                else:
-                    sQuery += f" or (a.modmailID = '{mail.id}' and ifnull(a.LastModmailUpdated,'{mail.last_user_update}')  <= '{mail.last_user_update}')"
-            sQuery = f"select a.User, '<@' ||  m.DiscordID ||  '>', 'https://mod.reddit.com/mail/inbox/'|| a.modmailID,'https://'|| a.Link, at.Description, a.Id, a.LastModmailUpdated from Actions a join DiscordUsers m on m.Id = a.Mod join ActionType at on at.Id = a.ActionType where {sQuery[4:]}"
-            rows = DB.ExecuteDB(sQuery)
-            #print(f"Query: '{sQuery}'\nDB Matches: {len(rows)}\n")
-            if len(rows) > 0:
-                channel = client.get_channel(int(DB.GetSetting("GaryChannel")))
-            for row in rows:
-                #print(f"{row[1]}: {row[0]} Respondio al modmail generado por:\n{row[3]}\nSancion: {row[4]}\nClickea en el siguiente link para responder\n{row[2]}\nLastModmailUpdated: {row[6]}\nQuery criteria: [{sQuery}")
-                embMsg = discord.Embed()
-                embMsg.description = f"[u/{row[0]}](https://www.reddit.com/user/{row[0]}/) Respondio al modmail generado por:\n[{row[4]}]({row[3]})\nClickea [Aqui]({row[2]}) para responder"
-                sentMsg = await channel.send(row[1], embed=embMsg)
-                DB.WriteDB(f"Update Actions set LastModmailUpdated = '{datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f+00:00')}' WHERE Id = {row[5]}")
         except:
-            print(f"Ocurrio un error al intentar obtener modmails de la API de Reddit: {sys.exc_info()[1]}")
+            Log(f"An error occurred while trying to get modmails from Reddit's API: {sys.exc_info()[1]}",bcolors.WARNING,logging.ERROR)
+async def CheckModmailBox(modmailbox):
+    sub = await reddit.subreddit(modmailbox.Subreddit)
+    sQuery = ""
+    mlastUpd = ""
+    try:
+        async for mail in sub.modmail.conversations():
+            if mail.last_updated > modmailbox.LastUpdated:
+                Log(f"[r/{modmailbox.Subreddit}] New modmail ID {mail.id} received at {mail.last_updated}",bcolors.OKGREEN,logging.INFO)
+                if mail.last_mod_update is None or (mail.last_user_update is not None and  mail.last_mod_update < mail.last_user_update):
+                    sQuery += f" or (MM.modmailID = '{mail.id}' and ifnull(MM.LastModmailUpdated,'{mail.last_user_update}')  <= '{mail.last_user_update}')"
+                if mail.last_updated > mlastUpd:
+                        mlastUpd = mail.last_updated
+    except:
+        Log(f"An error occurred while reading modmails ({mail.id}) from Reddit's API: {sys.exc_info()[1]}",bcolors.WARNING,logging.ERROR)
+        mlastUpd = modmailbox.LastUpdated
+    if mlastUpd > modmailbox.LastUpdated:
+        modmailbox.LastUpdated = mlastUpd
+    if len(sQuery) > 0:
+        sQuery =  "select R.RedditName, '<@' ||  m.DiscordID ||  '>', 'https://mod.reddit.com/mail/inbox/'|| MM.modmailID,'https://'|| a.Link, at.Description, a.Id, MM.LastModmailUpdated, MM.modmailID " \
+                    "from Actions a join RedditUsers R on R.Id = A.RedditUserId join Modmails MM on MM.ActionId = A.Id join DiscordUsers m on m.Id = a.Mod join ActionType at on at.Id = a.ActionType join UserRoles UR on UR.DiscordId = m.Id join Roles RL on RL.Id = UR.RoleId " \
+                    f"where RL.Name = 'Reddit Mod' and {sQuery[4:]}"
+        rows = DB.ExecuteDB(sQuery)
+        #print(f"Query: '{sQuery}'\nDB Matches: {len(rows)}\n")
+        if len(rows) > 0:
+            channel = client.get_channel(int(DB.GetSetting("GaryChannel")))
+            if len(rows) > 1:
+                Log(f"multiple modmail responses using the following query:\n{sQuery}",bcolors.WARNING,logging.WARNING)
+        for row in rows:
+            #print(f"{row[1]}: {row[0]} Respondio al modmail generado por:\n{row[3]}\nSancion: {row[4]}\nClickea en el siguiente link para responder\n{row[2]}\nLastModmailUpdated: {row[6]}\nQuery criteria: [{sQuery}")
+            embMsg = discord.Embed()
+            embMsg.description = f"[u/{row[0]}](https://www.reddit.com/user/{row[0]}/) Respondio al modmail generado por:\n[{row[4]}]({row[3]})\nClickea [Aqui]({row[2]}) para responder"
+            sentMsg = await channel.send(row[1], embed=embMsg)
+            DB.WriteDB(f"Update Modmails set LastModmailUpdated = '{datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f+00:00')}' WHERE modmailID = '{row[7]}'")
 @client.event
 async def on_ready():
-    print(f'{client.user.name} has connected to Discord!')
+    InitializeLog(os.getenv('RedditBotLog'))
+    envFile = os.path.join(os.path.dirname(os.path.abspath(__file__)) + os.path.sep, '.env')
+    dotenv.set_key(envFile,"RedditModPID",str(os.getpid()))
+    Log(f"Reddit mod bot connected to Discord using discord user {client.user.name}",bcolors.OKGREEN,logging.INFO)
     rres = await async_get_reddit_object()
     if rres['status'] == 'success':
         global reddit
         reddit = rres['data']
+        rUser = await reddit.user.me()
+        Log(f"Reddit mod bot connected to Reddit using user {rUser.name}",bcolors.OKGREEN,logging.INFO)
+        await CheckModmail()
+        loop = asyncio.get_event_loop()
+        loop.run_forever()
     else:
-        print(rres['data'])
-    await CheckModmail()
-    loop = asyncio.get_event_loop()
-    loop.run_forever()
+        Log(f"Reddit mod bot couldn't connect to Reddit, status returned: {rres['status']}",bcolors.OKGREEN,logging.ERROR)
 
 @client.event
 async def on_message(message):
     Response = []
-    if message.author == client.user:
+    if message.author == client.user or message.channel.id == 929080844407164988: #!=820103550305828884:
         return
     SenderAction = CheckSender(message.author)
     if 'Bot User' in SenderAction.Roles or 'Admin' in SenderAction.Roles: 
@@ -91,15 +102,9 @@ async def on_message(message):
         if StandardMessage.strip(' ')=="gary":
             Response = [Message(False,False,MessageType.Text,"gary - Muestra esta ayuda\nwarns <user> - Muestra los warns de un usuario\nunwarn <id> - Elimina un warn especifico\nunban <user> - desbannea a un usuario\napproveuser <user> - Agrega a un usuario a la lista de usuarios aprobados\nusers - funciones de usuarios\nroles - funciones de roles\nsettings - configura las preferencias\npolicies - configura las politicas de moderacion\nreasons - configura los motivos de sancion\nstats - Muestra estadisticas de moderacion\nschedposts - Muestra los posts programados\n<link> - inicia el proceso de warn")]
         elif StandardMessage.startswith('warns '):
-            if 'Reddit Mod' in SenderAction.Roles: 
-                Response = GetWarns(message.content[6:].strip(' '))
-            else:
-                Response = [Message(False,False,MessageType.Text,"Se requiere del rol Reddit Mod para consultar warns.")]
+            Response = GetWarns(message.content[6:].strip(' '))
         elif StandardMessage.startswith('unwarn '):
-            if 'Reddit Mod' in SenderAction.Roles: 
-                Response = Unwarn(message.content[7:].strip(' '))
-            else:
-                Response = [Message(False,False,MessageType.Text,"Se requiere del rol Reddit Mod para remover warns.")]
+            Response = Unwarn(message.content[7:].strip(' '), SenderAction.Roles)
         elif StandardMessage.startswith('unban '):
             if 'Reddit Mod' in SenderAction.Roles: 
                 Response = await Unban(message.content[6:].strip(' '), reddit)
@@ -131,43 +136,48 @@ async def on_message(message):
         elif StandardMessage.strip(' ')=="undo":
             if 'Reddit Mod' in SenderAction.Roles: 
                 if not SenderAction.PendingAction is None:
-                    DeletePending(SenderAction.PendingAction)
+                    DeletePending(DB, SenderAction.PendingAction)
                     Response = [Message(False,False,MessageType.Text,f"WarnID {SenderAction.PendingAction} pendiente eliminado.")]
                 else:
                     Response = [Message(False,False,MessageType.Text,"No hay warnings pendientes.")]
         elif 'Reddit Mod' in SenderAction.Roles: 
-            if SenderAction.PendingAction is None:
-                Response = await InitAction(message.content, reddit, SenderAction)
-            else:
-                linkType = GetLinkType(message.content)
-                if linkType != 0:
-                    DeletePending(SenderAction.PendingAction) #el mod mando otro link en vez de responder, borrar lo pendiente y hacer uno nuevo
-                    Response = await InitAction(message.content, reddit, SenderAction)
+            ActionableMessage = message.content.split('!')
+            linkType = GetLinkType(ActionableMessage[0])
+            if linkType != 0:
+                if SenderAction.PendingAction is not None:
+                    DeletePending(DB, SenderAction.PendingAction) #el mod mando otro link en vez de responder, borrar lo pendiente y hacer uno nuevo
+                if len(ActionableMessage)>1:
+                    asyncio.Task(FullSanctionMessage(ActionableMessage,reddit,SenderAction,message))
                 else:
-                    Response = await ResolveAction(message.content, SenderAction.PendingAction, reddit)
+                    Response = await InitAction(ActionableMessage[0], reddit, SenderAction)
+            elif SenderAction.PendingAction is not None:
+                Response = await ResolveAction(message.content, SenderAction.PendingAction, reddit,message)
         for IndResponse in Response:
-            if IndResponse.To == Recipient.Channel:
-                asyncio.Task(HandleMessage(int(os.getenv('DiscordMaxChars')),DB, message,IndResponse))
+            if IndResponse.To is None:
+                destination = message.channel
             else:
-                asyncio.Task(HandleDirectMessage(int(os.getenv('DiscordMaxChars')),DB, client, message.author,IndResponse))
+                destination = message.author
+            asyncio.Task(HandleMessage(int(os.getenv('DiscordMaxChars')),DB, destination,IndResponse))
             await asyncio.sleep(1)
 
 
     if message.content == 'raise-exception':
         raise discord.DiscordException
-
-def MassSanatizeLinks():
-    rows = DB.ExecuteDB(f"SELECT Id, Link FROM Actions")
-    sSub = DB.GetSetting("subreddit").lower()
-    for row in rows:
-        DB.WriteDB(f"Update Actions set [Link] = '{SanatizeRedditLinkSub(row[1], sSub)}' WHERE Id = {row[0]}")
-def SanatizeRedditLinkSub(sIn,subReddit):
+async def FullSanctionMessage(ActionableMessage,reddit,SenderAction,message):
+    sLink = ActionableMessage[0]
+    Response = await InitAction(ActionableMessage[0], reddit, SenderAction)
+    SenderAction = CheckSender(message.author)
+    if SenderAction.PendingAction is not None:
+        Response = await ResolveAction(message.content[len(sLink):], SenderAction.PendingAction, reddit,message)
+    for IndResponse in Response:
+        await HandleMessage(int(os.getenv('DiscordMaxChars')),DB, message.channel ,IndResponse)
+def SanatizeRedditLink(sIn):
     sIn = sIn.lstrip('http')
     sIn = sIn.lstrip('s')
     sIn = sIn.lstrip('://')
     sIn = sIn.lstrip('www.')
     sIn = sIn.lstrip('old.') 
-    if (sIn.startswith('reddit.com') and (subReddit in sIn.lower() or 'message' in sIn.lower())) or sIn.startswith('mod.reddit.com/mail'):
+    if (sIn.startswith('reddit.com') and (IsValidSubLink(sIn.lower(), DB) or 'message' in sIn.lower())) or sIn.startswith('mod.reddit.com/mail'):
         sIn = sIn.rstrip('/')
         chunks = sIn.split("?")
         afterlastslash = 0
@@ -182,9 +192,6 @@ def SanatizeRedditLinkSub(sIn,subReddit):
             sIn = '/'.join(chunks)
         return sIn
     return ''
-
-def SanatizeRedditLink(sIn):
-    return SanatizeRedditLinkSub(sIn, DB.GetSetting("subreddit").lower())   
 def HandleReasons(sCommand, UserRoles):
     if sCommand.lower().startswith('list'):
         return GetReasons()
@@ -203,17 +210,27 @@ def HandleReasons(sCommand, UserRoles):
             return DefaultMessageReason(sCommand[17:].strip(' '))
         else:
             return [Message(False,False,MessageType.Text,"Se requiere del rol Bot Config para editar los mensajes por defecto.")]
+    if sCommand.lower().startswith('setrulelink '):
+        if 'Bot Config' in UserRoles: 
+            return DefaultMessageReason(sCommand[17:].strip(' '))
+        else:
+            return [Message(False,False,MessageType.Text,"Se requiere del rol Bot Config para editar los links a las reglas.")]
     else:
-        return [Message(False,False,MessageType.Text,"reasons list - Muestra un listado de los motivos\nreasons remove <id> - Elimina un motivo\nreasons edit <id (entero, si esta vacio es un nuevo registro)>,<Descripcion(texto)>,<Peso(entero)> - Agrega o edita un motivo\nreasons setdefaultmessage <id (entero)>,<Descripcion(texto)> - Agrega (o quita si esta vacio) un mensaje por defecto a los motivos")]
+        return [Message(False,False,MessageType.Text,"reasons list - Muestra un listado de los motivos\nreasons remove <id> - Elimina un motivo\nreasons edit <id (entero, si esta vacio es un nuevo registro)>,<Descripcion(texto)>,<Peso(entero)> - Agrega o edita un motivo\nreasons setdefaultmessage <id (entero)>,<Descripcion(texto)> - Agrega (o quita si esta vacio) un mensaje por defecto a los motivos\nreasons setrulelink <id (entero)>,<link(texto)> - Agrega (o quita si esta vacio) un link a la regla referenciada")]
 def DefaultMessageReason(sCommand):
+    return EditReasonProperty(sCommand, 'DefaultMessage', 'Motivo')
+def RuleLinkReason(sCommand):
+    return EditReasonProperty(sCommand, 'RuleLink', 'Link')
+def EditReasonProperty(sCommand, Property, PropertyDesc):
     sCommand = sCommand.replace("\,","[Coma]")
     sParams = sCommand.split(',')
     if len(sParams) == 2 and check_int(sParams[0].strip(' ')):
         sId = sParams[0].strip(' ')
         sDescription = sParams[1].replace("[Coma]",",").strip(' ')
-        DB.WriteDB(f"Update ActionType set [DefaultMessage] = '{sDescription}' where Id = {sId}",row)
-        return [Message(False,False,MessageType.Text,"Motivo agregado")]
+        DB.WriteDB(f"Update ActionType set [{Property}] = '{sDescription}' where Id = {sId}")
+        return [Message(False,False,MessageType.Text,f"{PropertyDesc} agregado")]
     return [Message(False,False,MessageType.Text,f"Formato incorrecto, por favor asegurate de que todos los campos esten completados correctamente:\n<id(entero)>,<Mensaje(texto)>\nPara insertar comas [,] en los campos de texto usar el caracter de escape \\\,")]
+
 def EditReason(sCommand):
     sCommand = sCommand.replace("\,","[Coma]")
     sParams = sCommand.split(',')
@@ -230,8 +247,8 @@ def EditReason(sCommand):
                 rows = DB.ExecuteDB(f"SELECT * FROM ActionType where Id = {sId} and Active = 1")
                 if len(rows) > 0:
                     DB.WriteDB(f"Update ActionType set [Description] = ?, [Weight] = ? WHERE Id = {sId}", row)
-                    return [Message(False,False,MessageType.Text,f"Motivo #{sId} actualizado.")]
-                return [Message(False,False,MessageType.Text,f"Motivo #{sId} no encontrado.")]
+                    return [Message(False,False,MessageType.Text,f"Motivo {sId} actualizado.")]
+                return [Message(False,False,MessageType.Text,f"Motivo {sId} no encontrado.")]
     return [Message(False,False,MessageType.Text,f"Formato incorrecto, por favor asegurate de que todos los campos esten completados correctamente:\n<id(entero, si esta vacio es un nuevo registro)>,<Descripcion(texto)>,<Peso(entero)>\nPara insertar comas [,] en los campos de texto usar el caracter de escape \\\,")]
 def RemoveReason(sId):
     if not check_int(sId):
@@ -240,8 +257,8 @@ def RemoveReason(sId):
     rows = DB.ExecuteDB(f"SELECT * FROM ActionType where Id = {iId}")
     if len(rows) > 0:
         DB.WriteDB(f"Update ActionType set Active = 0 WHERE Id = {iId}")
-        return [Message(False,False,MessageType.Text,f"Motivo #{iId} eliminado.")]
-    return [Message(False,False,MessageType.Text,f"Motivo #{iId} no encontrado.")]
+        return [Message(False,False,MessageType.Text,f"Motivo {iId} eliminado.")]
+    return [Message(False,False,MessageType.Text,f"Motivo {iId} no encontrado.")]
 def GetReasons():
     rows = DB.ExecuteDB(f"SELECT * FROM ActionType where Active = 1")
     sRetu = ""
@@ -250,77 +267,88 @@ def GetReasons():
     return [Message(False,False,MessageType.Text,sRetu)]
 
 async def HandleSchedposts(sCommand, reddit):
-    if sCommand.lower().startswith('list'):
-        return await GetSchedPostList(reddit)
-    if sCommand.lower().startswith('details'):
-        return await GetSchedPostDetails(reddit, sCommand[8:].strip(' '))
-    if sCommand.lower().startswith('post'):
-        return await MnuPostSchedPost(reddit, sCommand[5:].strip(' '))
-    if sCommand.lower().startswith('edit'):
-        return [Message(True,False,MessageType.Text,"Para editar los posts recursivos hace click [Aqui](https://www.reddit.com/r/argentina/about/wiki/scheduledposts)")]
+    if sCommand.lower().startswith('list '):
+        return await GetSchedPostList(reddit, sCommand[5:].strip(' ').lower())
+    if sCommand.lower().startswith('details '):
+        return await GetSchedPostDetails(reddit, sCommand[8:].strip(' ').lower())
+    if sCommand.lower().startswith('post '):
+        return await MnuPostSchedPost(reddit, sCommand[5:].strip(' ').lower())
+    if sCommand.lower().startswith('edit '):
+        sSub = sCommand[5:].strip(' ').lower()
+        if IsValidSubLink(sSub, DB):
+            return [Message(True,False,MessageType.Text,f"Para editar los posts recursivos hace click [Aqui](https://www.reddit.com/r/{sSub}/about/wiki/scheduledposts)")]
+        return [Message(False,False,MessageType.Text,"Subreddit invalido")]
     else:
-        return [Message(False,False,MessageType.Text,"schedposts list - Muestra la lista de posts programados\nschedposts details <ID(entero)> - Muestra los detalles del post programado\nschedposts post <ID(entero)> - Postea un post programado\nschedposts edit - Muestra el link a la wiki en donde configurar los posts programados")]
-async def GetSchedPostList(reddit):
-    schedPosts = await GetSchedPosts(reddit)
-    sRetu = ""
-    for schedpost in schedPosts.SchedPosts:
-        sRetu = f"{sRetu}#{schedpost.Id} - {schedpost.Title}\r\n"
-    return [Message(False,False,MessageType.Text,sRetu)]
-async def GetSchedPosts(reddit):
-    subreddit = await reddit.subreddit(DB.GetSetting("subreddit"))
-    wiki = await subreddit.wiki.get_page("scheduledposts")
-    return GetSchedPostsFromWiki(wiki)
+        return [Message(False,False,MessageType.Text,"schedposts list <Subreddit> - Muestra la lista de posts programados en el subreddit\nschedposts details <Subreddit> <ID(entero)> - Muestra los detalles del post programado\nschedposts post <Subreddit> <ID(entero)> - Postea un post programado\nschedposts edit <subreddit> - Muestra el link a la wiki en donde configurar los posts programados")]
+async def GetSchedPostList(reddit, sSub):
+    if IsValidSubLink(sSub, DB):
+        schedPosts = await GetSchedPosts(reddit, sSub)
+        sRetu = ""
+        for schedpost in schedPosts.SchedPosts:
+            sRetu = f"{sRetu}#{schedpost.Id} - {schedpost.Title}\r\n"
+        return [Message(False,False,MessageType.Text,sRetu)]
+    return [Message(False,False,MessageType.Text,"Subreddit invalido")]
+async def GetSchedPosts(reddit, sSub):
+        subreddit = await reddit.subreddit(sSub)
+        wiki = await subreddit.wiki.get_page("scheduledposts")
+        return GetSchedPostsFromWiki(wiki)
 async def MnuPostSchedPost(reddit, sCommand):
-    if not sCommand.isnumeric():
-        return [Message(False,False,MessageType.Text,"Id Incorrecto")]
-    iId = int(sCommand)
-    schedPosts = await GetSchedPosts(reddit)
-    subreddit = await reddit.subreddit(DB.GetSetting("subreddit"))
-    Filtered = filter(lambda x: x.Id == iId, schedPosts.SchedPosts)
-    Posted = False
-    sRet = ""
-    for Post in Filtered:
-        Post.nextTime = "N/A"
-        if await PostSchedPost(DB, reddit, subreddit, Post):
-            RedditPostId = DB.GetDBValue(f"select PostID from ScheduledPosts where RedditID = {Post.Id} order by PostedDate desc limit 1")
-            sRet = f"{sRet}Post [{Post.Title}](https://www.reddit.com/r/argentina/comments/{RedditPostId}/_/) Creado correctamente\n"
-    if len(sRet) > 0:
-        return [Message(True,True,MessageType.Text,sRet)]
-    else:
-        return [Message(False,False,MessageType.Text,"Hubo un error al crear el post, consulta los logs")]
+    chunks = sCommand.split(' ')
+    if IsValidSubLink(chunks[0], DB):
+        if not chunks[1].isnumeric():
+            return [Message(False,False,MessageType.Text,"Id Incorrecto")]
+        iId = int(chunks[1])
+        schedPosts = await GetSchedPosts(reddit, chunks[0])
+        subreddit = await reddit.subreddit(chunks[0])
+        Filtered = filter(lambda x: x.Id == iId, schedPosts.SchedPosts)
+        Posted = False
+        sRet = ""
+        for Post in Filtered:
+            Post.nextTime = "N/A"
+            if await PostSchedPost(DB, reddit, subreddit, Post):
+                RedditPostId = DB.GetDBValue(f"select PostID from ScheduledPosts where RedditID = {Post.Id} and Subreddit = '{chunks[0]}' order by PostedDate desc limit 1")
+                sRet = f"{sRet}Post [{Post.Title}](https://www.reddit.com/r/{chunks[0]}/comments/{RedditPostId}/_/) Creado correctamente\n"
+        if len(sRet) > 0:
+            return [Message(True,True,MessageType.Text,sRet)]
+        else:
+            return [Message(False,False,MessageType.Text,"Hubo un error al crear el post, consulta los logs")] #PostSchedPost logs info
+    return [Message(False,False,MessageType.Text,"Subreddit invalido")]
 async def GetSchedPostDetails(reddit, sCommand):
-    if not sCommand.isnumeric():
-        return [Message(False,False,MessageType.Text,"Id Incorrecto")]
-    iId = int(sCommand)
-    schedPosts = await GetSchedPosts(reddit)
-    Filtered = filter(lambda x: x.Id == iId, schedPosts.SchedPosts)
-    sRet = ""
-    for Post in Filtered:
-        sRet = f"{sRet}ID: {Post.Id}\nTitle: {Post.Title}\nBody: {Post.Body}\nFlair: {Post.Flair}\nSort By: {Post.Sort}\nRepeats every: "
-        if Post.RepeatUnit.lower() == "custom":
-            weekDayNames = ("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday")
-            weekdays = str(Post.RepeatValue).zfill(7)
-            for i in range(0,7):
-                if weekdays[i] == "1":
-                    sRet = f"{sRet}{weekDayNames[i]}, "
-            sRet = sRet.strip(', ')
+    chunks = sCommand.split(' ')
+    if IsValidSubLink(chunks[0], DB):
+        if not chunks[1].isnumeric():
+            return [Message(False,False,MessageType.Text,"Id Incorrecto")]
+        iId = int(chunks[1])
+        schedPosts = await GetSchedPosts(reddit,chunks[0])
+        Filtered = filter(lambda x: x.Id == iId, schedPosts.SchedPosts)
+        sRet = ""
+        for Post in Filtered:
+            sRet = f"{sRet}ID: {Post.Id}\nTitle: {Post.Title}\nBody: {Post.Body}\nFlair: {Post.Flair}\nSort By: {Post.Sort}\nRepeats every: "
+            if Post.RepeatUnit.lower() == "custom":
+                weekDayNames = ("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday")
+                weekdays = str(Post.RepeatValue).zfill(7)
+                for i in range(0,7):
+                    if weekdays[i] == "1":
+                        sRet = f"{sRet}{weekDayNames[i]}, "
+                sRet = sRet.strip(', ')
+            else:
+                sRet = f"{sRet}{Post.RepeatValue} {Post.RepeatUnit}"
+            sRet = f"{sRet}\nStart Date: {Post.StartDate}\n"
+            if Post.TimeLenght > 0:
+                sRet = f"{sRet}Sticky for: {str(timedelta(seconds=Post.TimeLenght))}\nSticky Position: {Post.StickyPos}\n"
+            else:
+                sRet = f"{sRet}Sticky: No\n"
+            if Post.EndsUnit.lower() == "never":
+                sRet = f"{sRet}Recurrence ends: Never"
+            elif Post.EndsUnit.lower() == "date":
+                sRet = f"{sRet}Recurrence ends: {Post.EndsValue}"
+            elif Post.EndsUnit.lower() == "occurrences":
+                sRet = f"{sRet}Recurrence ends: After {Post.EndsValue} Occurrences"
+        if len(sRet) > 0:
+            return [Message(False,False,MessageType.Text,sRet)]
         else:
-            sRet = f"{sRet}{Post.RepeatValue} {Post.RepeatUnit}"
-        sRet = f"{sRet}\nStart Date: {Post.StartDate}\n"
-        if Post.TimeLenght > 0:
-            sRet = f"{sRet}Sticky for: {str(timedelta(seconds=Post.TimeLenght))}\nSticky Position: {Post.StickyPos}\n"
-        else:
-            sRet = f"{sRet}Sticky: No\n"
-        if Post.EndsUnit.lower() == "never":
-            sRet = f"{sRet}Recurrence ends: Never"
-        elif Post.EndsUnit.lower() == "date":
-            sRet = f"{sRet}Recurrence ends: {Post.EndsValue}"
-        elif Post.EndsUnit.lower() == "occurrences":
-            sRet = f"{sRet}Recurrence ends: After {Post.EndsValue} Occurrences"
-    if len(sRet) > 0:
-        return [Message(False,False,MessageType.Text,sRet)]
-    else:
-        return [Message(False,False,MessageType.Text,"Id Incorrecto")]
+            return [Message(False,False,MessageType.Text,"Id Incorrecto")]
+    return  [Message(False,False,MessageType.Text,"Subreddit invalido")]
 async def HandleStats(sCommand, ModId, reddit):
     if sCommand.lower().startswith('mods'):
         return HandleModStats(sCommand[5:].strip(' '), ModId)
@@ -384,13 +412,13 @@ def HandleModStats(sCommand, ModID):
     if len(sCommand) > 0:
         sCommand = sCommand.lower()
         msgRetu.append(Message(False,False,MessageType.Text,f"**Estadisticas del mod {sCommand}**\n" + DB.GetTable(f"Select at.Description as Motivo, count(1) as Cantidad from Actions A join DiscordUsers M on M.Id = A.Mod join ActionType AT on A.ActionType = AT.Id Where lower(M.Name) = '{sCommand}' group by at.Description order by Cantidad desc")))
-        plot = GetModYearLog(sCommand,'plot.png')
+        plot = GetModYearLog(sCommand,'../img/plot.png')
         if len(plot) > 0:
             msgRetu.append(Message(False,False,MessageType.Image,plot))
-        plot = GetModMonthLog(sCommand,'plotm.png')
+        plot = GetModMonthLog(sCommand,'../img/plotm.png')
         if len(plot) > 0:
             msgRetu.append(Message(False,False,MessageType.Image,plot))
-        plot = GetModHourLog(sCommand,'ploth.png', ModID)
+        plot = GetModHourLog(sCommand,'../img/ploth.png', ModID)
         if len(plot) > 0:
             msgRetu.append(Message(False,False,MessageType.Image,plot))
     else:
@@ -526,13 +554,18 @@ async def HandleUserStats(sCommand, reddit):
     Limite = 20
     if check_int(sCommand):
         Limite = int(sCommand)
-    sRetu = [Message(False,False,MessageType.Text,f"**Top {str(Limite)} usuarios con mas acciones**\n" + DB.GetTable(f"select User, count(1) as Cantidad from Actions group by User order by Cantidad desc LIMIT {Limite}"))]
-    sRetu.append(Message(False,False,MessageType.Text, f"**Cantidad de usuarios por cantidad de acciones**\n" + DB.GetTable(f"Select Cantidad as CantidadDeFaltas, count(User) as Usuarios from (select A.User, count(1) as cantidad from Actions A join ActionType AT on AT.Id = A.ActionType where AT.Weight > 0 group by A.User) as Users group by Cantidad")))
+    sRetu = [Message(False,False,MessageType.Text,f"**Top {str(Limite)} usuarios con mas acciones**\n" + DB.GetTable(f"select R.RedditName, count(1) as Cantidad from Actions A join RedditUsers R on R.Id = A.RedditUserId group by R.RedditName order by Cantidad desc LIMIT {Limite}"))]
+    sRetu.append(Message(False,False,MessageType.Text, f"**Cantidad de usuarios por cantidad de acciones**\n" + DB.GetTable(f"Select Cantidad as CantidadDeFaltas, count(RedditUserId) as Usuarios from (select A.RedditUserId, count(1) as cantidad from Actions A join ActionType AT on AT.Id = A.ActionType where AT.Weight > 0 group by A.RedditUserId) as Users group by Cantidad")))
     return sRetu
 async def HandleIndUserStats(reddit, sCommand):
     oUser = await reddit.redditor(sCommand)
-    sSubreddit = DB.GetSetting("subreddit").lower()
+    sSubreddits = DB.GetSetting("subreddit") #checked
     await oUser.load()
+    MsgsRetu = GetWarns(sCommand, True)
+    for sSubreddit in sSubreddits:
+        MsgsRetu.append(await indUserStatsSub(reddit, sCommand, sSubreddit, oUser))
+    return MsgsRetu
+async def indUserStatsSub(reddit, sCommand, sSubreddit, oUser):
     submissions = []
     async for comment in oUser.comments.new(limit=None):
         if comment.subreddit_name_prefixed == "r/" + sSubreddit:
@@ -541,8 +574,7 @@ async def HandleIndUserStats(reddit, sCommand):
         if post.subreddit_name_prefixed == "r/" + sSubreddit:
             submissions.append(UserSubmission("post",post.created_utc, post.score, post.removed))
     if len(submissions) == 0:
-        return [Message(False,False,MessageType.Text,f"El usuario {sCommand} no participa del subrredit r/{sSubreddit}")]
-    MsgsRetu = GetWarns(sCommand, True)
+        return Message(False,False,MessageType.Text,f"El usuario {sCommand} no participa del subrredit r/{sSubreddit}")
     AccountCreated = datetime.fromtimestamp(oUser.created_utc)
     FirstDateOfParticipation = datetime.fromtimestamp(min(submissions,key = lambda post: post.Created).Created)
     CommentKarma = sum(p.score for p in filter(lambda x: x.Type == "comment", submissions))
@@ -559,12 +591,11 @@ async def HandleIndUserStats(reddit, sCommand):
         PostPercRemoved = 0
     daysActive = (datetime.today() - FirstDateOfParticipation).days
     subsPerDay = len(submissions) / daysActive 
-    MsgsRetu.append(Message(True,False,MessageType.Text,\
-        f"**Cuenta Creada:** {AccountCreated.strftime('%Y-%m-%d')}\n**Participa en el sub desde:** {FirstDateOfParticipation.strftime('%Y-%m-%d')}\n"\
+    return Message(True,False,MessageType.Text,\
+        f"**r/{sSubreddit}**\n****Cuenta Creada:** {AccountCreated.strftime('%Y-%m-%d')}\n**Participa en el sub desde:** {FirstDateOfParticipation.strftime('%Y-%m-%d')}\n"\
         f"**Comentarios**\n---**Cantidad:** {CommentCount}\n---**Karma: **{CommentKarma}\n---**Porcentaje de removidos:** {'{0:.3g}'.format(CommentPercRemoved)}%\n"\
         f"**Posts**\n---**Cantidad:** {PostCount}\n---**Karma: **{PostKarma}\n---**Porcentaje de removidos:** {'{0:.3g}'.format(PostPercRemoved)}%\n"\
-        f"**Submissiones promedio por dia:** {'{0:.3g}'.format(subsPerDay)}"))    
-    return MsgsRetu
+        f"**Submissiones promedio por dia:** {'{0:.3g}'.format(subsPerDay)}")
 def GetActingMods(TimeBack):
     sQuery = "select Name from( " \
             "select M.Name, min(A.Date) as Date " \
@@ -584,23 +615,22 @@ def GetActingMods(TimeBack):
     return DB.ExecuteDB(sQuery)
 
 def HandleSubStats(sCommand, ModId):
-    sRetu = [Message(False,False,MessageType.Text,f"**Modmail**\n" + DB.GetTable(f"select a1.Enviados, a2.Respondidos, printf(\"%.2f\",(100.00*a2.Respondidos)/a1.Enviados) as PorcentajeRespondidos from (select count(1) as Enviados,'a' as a from actions where Modmailid is not null) a1 join (select count(1) as Respondidos ,'a' as a from actions where lastmodmailupdated  is not null) a2 on a1.a = a2.a"))]
+    sRetu = [Message(False,False,MessageType.Text,f"**Modmail**\n" + DB.GetTable(f"select a1.Enviados, a2.Respondidos, printf(\"%.2f\",(100.00*a2.Respondidos)/a1.Enviados) as PorcentajeRespondidos from (select count(distinct ActionId) as Enviados,'a' as a from Modmails) a1 join (select count(distinct ActionId) as Respondidos ,'a' as a from Modmails where lastmodmailupdated is not null) a2 on a1.a = a2.a"))]
     sRetu.append(Message(False,False,MessageType.Text, f"**Cantidad de Acciones tomadas**\n" + DB.GetTable(f"select AT.Description as Descripcion, count(1) as Cantidad from Actions A join ActionType AT on AT.Id = A.ActionType group by AT.Description order by Cantidad desc")))
     #sRetu.append(Message(False,False,MessageType.Text, f"**Acciones por dia de la semana**\n" + DB.GetTable("select case DDW when '0' then 'Domingo' when '1' then 'Lunes' when '2' then 'Martes' when '3' then 'Miercoles' when '4' then 'Jueves' when '5' then 'Viernes' when '6' then 'Sabado' end as DiaDeLaSemana, Cantidad from (SELECT strftime('%w',Date) DDW, count(1) as Cantidad from actions group by DDW)") + "\n"))
-    
-    
-    plot = CreateLinePlot(f"select count(1) as 'cnt', strftime(\"%Y-%m\", a.Date) as 'mes' from Actions A where a.Date > DATE(Date(),'-1 years') group by strftime(\"%Y-%m\", a.Date)",'plot.png', 'Mes', 'Cantidad de Medidas', 'Medidas por Mes')
+
+    plot = CreateLinePlot(f"select count(1) as 'cnt', strftime(\"%Y-%m\", a.Date) as 'mes' from Actions A where a.Date > DATE(Date(),'-1 years') group by strftime(\"%Y-%m\", a.Date)",'../img/plot.png', 'Mes', 'Cantidad de Medidas', 'Medidas por Mes')
     if len(plot) > 0:
         sRetu.append(Message(False,False,MessageType.Image,plot))
 
-    plot = CreateLinePlot(f"select count(1) as 'cnt', strftime(\"%Y-%m\", a.Date) as 'mes' from Actions A join ActionType AT on AT.Id = A.ActionType where AT.Weight > 0 and a.Date > DATE(Date(),'-1 years') group by strftime(\"%Y-%m\", a.Date)",'plotp.png', 'Mes', 'Cantidad de Medidas', 'Medidas punitivas por Mes')
+    plot = CreateLinePlot(f"select count(1) as 'cnt', strftime(\"%Y-%m\", a.Date) as 'mes' from Actions A join ActionType AT on AT.Id = A.ActionType where AT.Weight > 0 and a.Date > DATE(Date(),'-1 years') group by strftime(\"%Y-%m\", a.Date)",'../img/plotp.png', 'Mes', 'Cantidad de Medidas', 'Medidas punitivas por Mes')
     if len(plot) > 0:
         sRetu.append(Message(False,False,MessageType.Image,plot))
 
     rows = GetActingMods('-1 years')
     plt.clf()
     for row in rows:
-        plot = GetModYearLog(row[0],'ploty.png',row[0], False)
+        plot = GetModYearLog(row[0],'../img/ploty.png',row[0], False)
     if len(plot) > 0:
         sRetu.append(Message(False,False,MessageType.Image,plot))
 
@@ -627,14 +657,14 @@ def HandleSubStats(sCommand, ModId):
             "		and (ML.Action like 'approve%' or ML.Action like 'remove%') "\
             "		group by Hora "\
             "		)group by Hora) counts on counts.Hora = cnt.x"
-    plot = CreateLinePlot(sQuery,'ploth.png', 'Mes', 'Cantidad de Acciones', 'Acciones por Hora')
+    plot = CreateLinePlot(sQuery,'../img/ploth.png', 'Mes', 'Cantidad de Acciones', 'Acciones por Hora')
     if len(plot) > 0:
         sRetu.append(Message(False,False,MessageType.Image,plot))
     
     plt.clf()
     rows = GetActingMods('-1 years')
     for row in rows:
-        plot = GetModHourLog(row[0],'plotm.png', ModId,row[0], False)
+        plot = GetModHourLog(row[0],'../img/plotm.png', ModId,row[0], False)
     if len(plot) > 0:
         sRetu.append(Message(False,False,MessageType.Image,plot))
     
@@ -715,12 +745,16 @@ def GetLinkType(sIn):
         return 2 #comment
     return 0 
 async def Unban(sUser, reddit):
-    sub = await reddit.subreddit(DB.GetSetting("subreddit"))
-    await sub.banned.remove(sUser)
+    subs = DB.GetSetting("subreddit") #checked
+    for sSub in subs:
+        sub = await reddit.subreddit(sSub)
+        await sub.banned.remove(sUser)
     return [Message(False,False,MessageType.Text,f"Usuario {sUser} ha sido desbanneado.")]
 async def ApproveUser(sUser, reddit):
-    sub = await reddit.subreddit(DB.GetSetting("subreddit"))
-    await sub.contributor.add(sUser)
+    subs = DB.GetSetting("subreddit") #checked
+    for sSub in subs:
+        sub = await reddit.subreddit(sSub)
+        await sub.contributor.add(sUser)
     return [Message(False,False,MessageType.Text,f"Usuario {sUser} ha sido agregado a users aprobados.")]
 def HandleUsers(sCommand, UserRoles):
     if sCommand.lower().startswith('list'):
@@ -866,18 +900,21 @@ def GetRoles():
         sRetu = sRetu + f"Id: {row[0]}\nRole: {row[1]}\n--------------------\n"
     return [Message(False,False,MessageType.Text,sRetu)]
 
-def Unwarn(sId):
+def Unwarn(sId, Roles):
     if not sId.isnumeric():
         return [Message(False,False,MessageType.Text,"Id Incorrecto")]
     iId = int(sId)
-    rows = GetActionDetail('', iId,'')
-    if len(rows) > 0:
-        DB.WriteDB(f"DELETE FROM Actions WHERE Id = {iId}")
-        return [Message(False,False,MessageType.Text,f"Warn #{iId} eliminado.")]
+    WarnType = GetWarnType(iId)
+    if WarnType is not None:
+        if 'Reddit Mod' in Roles or ('Discord Mod' in Roles and WarnType == "Discord"): 
+            return [Message(False,False,MessageType.Text,ConfirmedUnwarn(DB,iId))]
+        else:
+            return [Message(False,False,MessageType.Text,"Se requiere del rol Reddit Mod para remover warns de reddit.")]
     return [Message(False,False,MessageType.Text,f"Warn #{iId} no encontrado.")]
-
+def GetWarnType(iId):
+    return DB.GetDBValue(f"select case when DiscordUserId is null then 'Reddit' else 'Discord' end from Actions where Id = {iId}")
 def GetWarns(sUser, summary = False):
-    rows = GetActionDetail('', 0,sUser)
+    rows = GetCommonActionDetails(DB, "RedditName",sUser,False)
     sRetu = f"**Warns del usuario {sUser}**\n"
     dateFrom = datetime.now() - timedelta(days=int(DB.GetSetting("warnexpires")))
     iWeight = 0
@@ -900,19 +937,6 @@ def GetWarns(sUser, summary = False):
     else:
         sRetu += f"Total: {iWeight} Puntos"
     return [Message(True,False,MessageType.Text,sRetu)]
-def GetWarnsUserReport(sUser, msgLen):
-    rows = GetActionDetail('', 0,sUser)
-    sRetu = ""
-    dateFrom = datetime.now() - timedelta(days=int(DB.GetSetting("warnexpires")))
-    iWeight = 0
-    for row in rows:
-        if datetime.strptime(row['Date'], '%Y-%m-%d %H:%M:%S.%f') >= dateFrom and ifnull(row['Weight'],0) > 0:
-            sRetu = sRetu + f"{row['Date'].split(' ')[0]}\t[{row['TypeDesc']}](https://{row['Link']})\tPuntos: {row['Weight']}\n\n"
-            iWeight += row['Weight']
-    sRetu = sRetu.rstrip("\n") + f" **<-- Nueva Falta**\n\n**Total**: {iWeight}"
-    while len(sRetu) > msgLen:
-        sRetu = sRetu[sRetu.find("\n") + 2:]
-    return sRetu
 def CheckSender(author):
     mRoles = DB.ExecuteDB("select R.Name " \
                         "from UserRoles UR " \
@@ -925,13 +949,13 @@ def CheckSender(author):
     Id = DB.GetDBValue(f"select Id from DiscordUsers where DiscordId = {author.id}")
     PendingAction = None
     if Id is not None:
-        PendingAction = DB.GetDBValue(f"SELECT Id FROM Actions WHERE Mod = {Id} and ActionType is null and Processing is null")
+        PendingAction = DB.GetDBValue(f"SELECT Id FROM Actions WHERE Mod = {Id} and ActionType is null and Processing is null and RedditUserId is not null")
     return UserStatus(Id, Roles, PendingAction)
 
 def GetActionTypes(UserName, filter = "", FormatTable = False):
     sRetu = ""
     Weight = GetUsersCurrentWeight(UserName)
-    sQuery = f"SELECT '#' || t.Id as Id, t.Description as Descripcion, case t.Weight when 0 then 'Advertencia' else case p.Action when 1 then 'Advertencia' when 2 then case p.BanDays when -1 then 'Ban Permanente' else 'Ban ' || p.BanDays || ' Dias' End End End as Accion, t.Weight as Puntos FROM ActionType t join Policies p on p.[From] <= t.Weight + {Weight} and p.[To] >= t.Weight + {Weight} Where t.Active = 1 and t.Description like '%{filter}%' order by trim(t.Description), t.Weight desc"
+    sQuery = f"SELECT '!' || t.Id as Id, t.Description as Descripcion, case t.Weight when 0 then 'Advertencia' else case p.Action when 1 then 'Advertencia' when 2 then case p.BanDays when -1 then 'Ban Permanente' else 'Ban ' || p.BanDays || ' Dias' End End End as Accion, t.Weight as Puntos FROM ActionType t join Policies p on p.[From] <= t.Weight + {Weight} and p.[To] >= t.Weight + {Weight} Where t.Active = 1 and t.Description like '%{filter}%' order by trim(t.Description), t.Weight desc"
     if FormatTable:
         return DB.GetTable(sQuery)
     rows = DB.ExecuteDB(sQuery)
@@ -939,33 +963,29 @@ def GetActionTypes(UserName, filter = "", FormatTable = False):
         sRetu = f"{sRetu}{row[0]} - {row[1]} - **Puntos:** {row[3]} - **Accion: {row[2]} **\n"
     return sRetu
 
-def DeletePending(Id):
-    DB.WriteDB(f"DELETE FROM Actions WHERE Id = {Id}")
-
-def ValidateActionType(Id):
-    rows = DB.ExecuteDB(f"SELECT Weight FROM ActionType WHERE Id = {Id} and Active = 1")
-    if len(rows) > 0:
-        return int(rows[0][0])
-    return -1
-def SanatizeInput(sIn):
-    sOut = sIn.split(',')
-    sDesc = ''
-    if len(sOut) > 1:
-        sDesc = sIn[len(sOut[0]):].strip(',').strip(' ')
-    sId = sOut[0].strip(',').strip(' ')
-    if sId.startswith('#'):
-        sId = sId[1:]
-        if(sId.isnumeric()):
-            return {'Id': sId,'Description' : sDesc}
-    return {'Id': '0','Description' : sDesc}
 def GetUsersCurrentWeight(sUser):
     dateFrom = datetime.now() - timedelta(days=int(DB.GetSetting("warnexpires")))
-    rows = DB.ExecuteDB(f"Select Sum(t.Weight) FROM Actions a Join ActionType t on t.Id = a.ActionType WHERE a.User = '{sUser}' and a.Date >= '{dateFrom}'")
+    sQuery = 	"select sum(Weight) as Weight from( " \
+	            "Select ifnull(Sum(t.Weight),0) as Weight " \
+	            "FROM Actions a  " \
+	            "Join ActionType t on t.Id = a.ActionType  " \
+	            "join DiscordRedditUser DRU on DRU.DiscordId = A.DiscordUserId " \
+	            "join RedditUsers R on R.Id = DRU.RedditId " \
+	            f"where lower(R.RedditName) = '{sUser.lower()}' " \
+	            f"and a.Date >= '{dateFrom}' " \
+	            "union " \
+	            "Select ifnull(Sum(t.Weight),0) as Weight " \
+	            "FROM Actions a  " \
+	            "Join ActionType t on t.Id = a.ActionType  " \
+	            "join RedditUsers R on R.Id = A.RedditUserId " \
+	            f"where lower(R.RedditName) = '{sUser.lower()}' " \
+	            f"and a.Date >= '{dateFrom}')  "
+    rows = DB.ExecuteDB(sQuery)
     if(len(rows)) > 0 and check_int(rows[0][0]):
         return int(rows[0][0])
     return 0
 def GetApplyingPolicy(ActionId, AddedWeight):
-    rows = DB.ExecuteDB(f"Select User FROM Actions WHERE Id = {ActionId}")
+    rows = DB.ExecuteDB(f"Select R.RedditName FROM Actions A join RedditUsers R on R.Id = A.RedditUserId WHERE A.Id = {ActionId}")
     if len(rows) > 0:
         if AddedWeight > 0:
             Weight = GetUsersCurrentWeight(rows[0][0]) + AddedWeight
@@ -973,117 +993,67 @@ def GetApplyingPolicy(ActionId, AddedWeight):
             Weight = AddedWeight
         rows = DB.ExecuteDB(f"Select Action, BanDays, Message FROM Policies WHERE [From] <= {Weight} and [To] >= {Weight}")
         if len(rows) > 0:
-            return {'Action':rows[0][0], 'BanDays': rows[0][1], 'Message':rows[0][2]}
-    return  {'Action':0, 'BanDays': '0', 'Message':'0'}
+            return {'Action':rows[0][0], 'BanDays': rows[0][1], 'Message':rows[0][2], 'Weight':Weight}
+        Log(f"Couldn't find a Policy entry for Weight {Weight}", bcolors.WARNING, logging.ERROR)
+    else:
+        Log(f"Couldn't find a RedditUser entry for ActionId {ActionId}", bcolors.WARNING, logging.ERROR)
+    return  {'Action':0, 'BanDays': '0', 'Message':'0', 'Weight':0}
 
-async def CreateModMail(sMessage, Link, ActionDesc, Details, sUser, reddit):
-    try:
-        sMessage = sMessage.replace("[Sub]", DB.GetSetting("subreddit"))
-        sMessage = sMessage.replace("[Link]", f"https://{Link}")
-        sMessage = sMessage.replace("[ActionTypeDesc]", ActionDesc)
-        sMessage = sMessage.replace("[Details]", Details.replace("\n",">\n"))
-        if "[Consultas]" in sMessage:
-            sConsultas = await GetLastConsultasThread(reddit)
-            sMessage = sMessage.replace("[Consultas]", sConsultas)
-        if "[Summary]" in sMessage:
-            sMessage = sMessage.replace("[Summary]", GetWarnsUserReport(sUser,1000- (len(sMessage) - len("[Summary]"))))
-        sMessage = sMessage.replace("\\n", "\n")
-        return sMessage[:1000]
-    except:
-        raise
-async def GetLastConsultasThread(reddit):
-    List = ""
-    sub = await reddit.subreddit(DB.GetSetting("subreddit"))
-    #Submissions = await reddit.subreddit(DB.GetSetting("subreddit")).search(query='author:Robo-TINA AND (title:Consultas OR title:Preguntas)',sort='new',limit=1)
-    async for Submission in sub.search(query='author:Robo-TINA AND (title:Consultas OR title:Preguntas)',sort='new',limit=1):
-        List += Submission.shortlink
-    return List
 def GetUserByID(ID):
-    return DB.ExecuteDB(f"SELECT [User] FROM Actions where [Id] = {ID}")[0][0]
-async def ResolveAction(sIn, ActionId, reddit):
-    if not sIn.startswith('#'):
-        return [Message(False,False,MessageType.Text,f"Selecciona un motivo #<Id>, <Descripcion (Opcional)> \n{GetActionTypes(GetUserByID(ActionId),sIn.strip(' '))}\nUndo - Deshacer warn.")]
+    return DB.ExecuteDB(f"SELECT R.RedditName FROM Actions A join RedditUsers R on R.Id = A.RedditUserId where A.Id = {ID}")[0][0]
+async def ResolveAction(sIn, ActionId, reddit, message):
+    if not sIn.startswith('!'):
+        return [Message(False,False,MessageType.Text,f"Selecciona un motivo !<Id>, <Descripcion (Opcional)> \n{GetActionTypes(GetUserByID(ActionId),sIn.strip(' '))}\nUndo - Deshacer warn.")]
     Input = SanatizeInput(sIn)
-    Weight = ValidateActionType(Input['Id'])
+    Weight = ValidateActionType(DB, Input['Id'])
     if Weight > -1:
         ApplyingPol = GetApplyingPolicy(ActionId, Weight)
         if ApplyingPol['Action'] > 0:
             try:
                 #Mark action as processing
+                asyncio.Task(HandleMessage(int(os.getenv('DiscordMaxChars')),DB, message.channel ,Message(False,False,MessageType.Text,f"Procesando Warn ID {ActionId}...\nAplicando medida !{Input['Id']}")))
                 DB.WriteDB(f"Update Actions set Processing = 1 where Id = {ActionId}")
                 preparedAction = await ExecuteAction(reddit,Input['Id'],Input['Description'],ActionId,ApplyingPol['Message'])
+                sRetu = await NotifyRedditUser(DB, reddit, preparedAction, ApplyingPol, ActionId,"Reddit")
+                return [Message(False,False,MessageType.Text,sRetu)]
             except Exception as err:
+                Log(f"An error occurred while trying to delete submission for action Id {ActionId}:\n{sys.exc_info()[1]}",bcolors.WARNING,logging.ERROR)
                 #unmark processing
                 DB.WriteDB(f"Update Actions set Processing = null where Id = {ActionId}")
                 return [Message(False,False,MessageType.Text,f"Ocurrio un error al intentar borrar el post: {sys.exc_info()[1]}")]
-            ActionDetailRow = preparedAction["ActionDetailRow"]
-            modmail = preparedAction["ModMail"]
-            sSubReddit = DB.GetSetting("subreddit")
-            oSubReddit = await reddit.subreddit(sSubReddit)
-            isMuted = False
-            async for mutedUser in oSubReddit.muted():
-                if mutedUser.name == ActionDetailRow['User']:
-                    isMuted = True
-                    MutedRelationship = mutedUser
-            if isMuted:
-                await oSubReddit.muted.remove(MutedRelationship)
-            if ApplyingPol['Action'] == 1: #Warn
-                objModmail = await oSubReddit.modmail.create(subject = f"Equipo de Moderacion de /r/{sSubReddit}",body = modmail, recipient = ActionDetailRow['User'],author_hidden = True)
-                UpdateModmailId(objModmail.id, ActionId)
-                await objModmail.archive()
-            if ApplyingPol['Action'] == 2: #Ban
-                sRet = await BanUser(oSubReddit,ApplyingPol['BanDays'],ActionDetailRow, modmail, ActionId)
-                #lastMessages = await oSubReddit.modmail.conversations(sort="mod", state="archived", limit=1)
-                async for lastMessage in oSubReddit.modmail.conversations(sort="mod", state="archived", limit=1):
-                    #lastMessage.load()
-                    if lastMessage.participant.name == ActionDetailRow['User']:
-                         UpdateModmailId(lastMessage.id, ActionId)
-                    else:
-                        sRet += " - No se pudo enviar mod mail."
-                return [Message(False,False,MessageType.Text,sRet)]
-            if isMuted:
-                await oSubReddit.muted.add(MutedRelationship)
-            return [Message(False,False,MessageType.Text,"Usuario advertido.")]
-            #Aca va la parte en donde vemos que hacemos con las politicas
+
         return [Message(False,False,MessageType.Text,"Error al buscar politica")]
     else:
         return [Message(False,False,MessageType.Text,"Formato incorrecto, por favor ingresa el motivo usando los IDs correspondientes")]
 
-def UpdateModmailId(modmailId, ActionId):
-    DB.WriteDB(f"UPDATE Actions SET modmailID = '{modmailId}' WHERE Id = {ActionId};")
 async def ExecuteAction(reddit, InputId, InputDesc, ActionId, Message):
     try:
-        ActionDetailRow = GetActionDetail('', ActionId,'')[0]
+        
+        ActionDetailRow = GetCommonActionDetails(DB, "ActionId",ActionId)[0]
         LinkType = GetLinkType(f"https://{ActionDetailRow['Link']}")
-        snapshot = None
         if LinkType == 1:
             submission = asyncpraw.models.Submission(reddit,url = f"https://{ActionDetailRow['Link']}")
-            await submission.load()
         elif LinkType == 2:
             submission = asyncpraw.models.Comment(reddit,url = f"https://{ActionDetailRow['Link']}")
-            await submission.load()
-            AuxSubmission = submission
-            snapshot = ""
-            while type(AuxSubmission) == asyncpraw.models.reddit.comment.Comment:
-                snapshot = f"[{datetime.fromtimestamp(AuxSubmission.created_utc).strftime('%Y-%m-%d %H:%M:%S')}] {GetAuthorName(AuxSubmission)}:\r\n\t{AuxSubmission.body}\r\n{snapshot}"
-                AuxSubmission = await AuxSubmission.parent()
-                await AuxSubmission.load()
+            asyncio.Task(SaveSnapshot(submission,ActionId))
         if LinkType != 0:
-            await RemoveSubAndChildren(submission)
-        UpdateQuery = f"UPDATE Actions SET Processing = null, ActionType = ?, Description = ?"
-        if snapshot is not None:
-            UpdateQuery = f"{UpdateQuery}, Snapshot = ?"
-            params = (InputId,InputDesc,snapshot,ActionId)
-        else:
-            params = (InputId,InputDesc,ActionId)
-        UpdateQuery = f"{UpdateQuery} WHERE Id = ?;"
-        DB.WriteDB(UpdateQuery, params)
-        ActionDetailRow = GetActionDetail('', ActionId,'')[0]
-        modmail = await CreateModMail(Message, ActionDetailRow['Link'],ActionDetailRow['TypeDesc'],ActionDetailRow['Details'],ActionDetailRow['User'], reddit)
+            asyncio.Task(RemoveSubAndChildren(submission))
+        DB.WriteDB(f"UPDATE Actions SET Processing = null, ActionType = ?, Description = ? WHERE Id = ?;", (InputId,InputDesc,ActionId))
+        ActionDetailRow = GetCommonActionDetails(DB, "ActionId",ActionId)[0]
+        modmail = await CreateModMail(Message, ActionDetailRow['Link'],ActionDetailRow['TypeDesc'],ActionDetailRow['Details'],ActionDetailRow['User'],ActionDetailRow['RuleLink'], ActionDetailRow['Snapshot'], reddit, DB)
         return {'ActionDetailRow': ActionDetailRow, 'ModMail': modmail}
     except Exception as err:
-        raise 
+        raise ExecuteActionException(f"Error while trying to execute Action {ActionId}:\r{err}")
+async def SaveSnapshot(Comment, ActionId):
+    await Comment.load()
+    snapshot = ""
+    while type(Comment) == asyncpraw.models.reddit.comment.Comment:
+        snapshot = f"[{datetime.fromtimestamp(Comment.created_utc).strftime('%Y-%m-%d %H:%M:%S')}] {GetAuthorName(Comment)}:\r\n\t{Comment.body}\r\n{snapshot}"
+        Comment = await Comment.parent()
+        await Comment.load()
+    DB.WriteDB( f"UPDATE Actions SET Snapshot = ? where Id =?",(snapshot,ActionId))
 async def RemoveSubAndChildren(submission):
+    await submission.load()
     if type(submission) == asyncpraw.models.reddit.comment.Comment:
         await submission.refresh()
         replies = submission.replies.list()
@@ -1094,49 +1064,33 @@ async def RemoveSubAndChildren(submission):
         if type(sub) == asyncpraw.models.reddit.comment.Comment and GetAuthorName(sub) == submission.author.name:
             await sub.mod.remove()
     await submission.mod.remove()
-async def BanUser(sub,BanDays,ActionDetailRow, modmail, ActionId):
-    try:
-        if int(BanDays) > 0:
-            await sub.banned.add(ActionDetailRow['User'],ban_reason=ActionDetailRow['TypeDesc'], duration=int(BanDays), ban_message=modmail)
-            return f"Usuario banneado por {BanDays} dias."
-        await sub.banned.add(ActionDetailRow['User'],ban_reason=ActionDetailRow['TypeDesc'], ban_message=modmail)
-        return f"Usuario banneado permanentemente."
-    except: 
-        #unwarn ActionId rollback
-        Unwarn(f"{ActionId}")
-        return f"Ocurrio un error al intentar bannear al usuario: {sys.exc_info()[1]}"
 def GetAuthorName(submission):
     if submission is not None and submission.author is not None:
         return submission.author.name
     return "[Usuario Eliminado]"
-def GetActionDetail(Link, ActionId, User):
-    sQuery = f"SELECT m.Name, ifnull(t.Description,'Deleted Reason Id ' + a.ActionType), ifnull(NULLIF(a.Description, ''), ifnull(t.DefaultMessage,'')), a.Date, a.Link, a.User, a.Id, t.Weight,  '<@' ||  m.DiscordID ||  '>', a.Snapshot FROM Actions a left join DiscordUsers m on m.Id = a.Mod left join ActionType t on t.Id = a.ActionType "
-    if ActionId > 0:
-        sQuery = sQuery + f"WHERE a.Id = '{ActionId}'"
-    elif len(Link) > 0:
-        sQuery = sQuery + f"WHERE a.Link = '{SanatizeRedditLink(Link)}'"
-    elif len(User) > 0:
-        sQuery = sQuery + f"WHERE lower(a.User) = '{User.lower()}'"
-    rows = DB.ExecuteDB(sQuery)
-    lst = []
-    for row in rows:
-        lst.append({'ModName':row[0], 'TypeDesc': row[1], 'Details':row[2], 'Date':row[3], 'Link':row[4], 'User':row[5], 'Id': row[6], 'Weight': row[7], 'DiscordId': row[8], 'Snapshot':row[9]})
-    return lst
-
+async def GetModmailObj(Link):
+    sSubs = DB.GetSetting("subreddit") #Checked
+    for sSub in sSubs:
+        oSub = await reddit.subreddit(sSub)
+        modmail = await oSub.modmail(SanatizeRedditLink(Link).rsplit('/',1)[1])
+        if modmail is not None:
+            return modmail
+    return None
 async def InitAction(Link, reddit, SenderAction):
     try:
         linkType = GetLinkType(Link)
         if linkType > 0:
             if linkType == 3:  #Modmail
-                oSub = await reddit.subreddit(DB.GetSetting("subreddit"))
-                modmail = await oSub.modmail(SanatizeRedditLink(Link).rsplit('/',1)[1])
+                modmail = await GetModmailObj(Link)
+                if modmail is None:
+                    return [Message(False,True,MessageType.Text,f"Modmail no encontrado.")]
                 AuthorName = modmail.participant.name  # This returns a ``Redditor`` object.
                 Link = f"reddit.com/message/messages/{modmail.legacy_first_message_id}"
-            rows = GetActionDetail(Link, 0,'')
+            rows = GetCommonActionDetails(DB, "Link",SanatizeRedditLink(Link))
             if len(rows) > 0:
                 if rows[0]['TypeDesc'] is None:
                     return [Message(False,True,MessageType.Text,f"Ese link esta a la espera de que el Moderador {rows[0]['DiscordId']} elija el motivo de la sancion.")]
-                return [Message(False,False,MessageType.Text,f"Ese link ya fue sancionado por Mod: {rows[0]['ModName']} \nFecha: {rows[0]['Date']} \nMotivo: {rows[0]['TypeDesc']}\nDetalles: {rows[0]['Details']}")]
+                return [Message(False,False,MessageType.Text,f"Ese link ya fue sancionado por Mod: {rows[0]['ModName']}\nId: {rows[0]['Id']}\nFecha: {rows[0]['Date']} \nMotivo: {rows[0]['TypeDesc']}\nDetalles: {rows[0]['Details']}")]
             else:
                 if linkType == 1:
                     submission = asyncpraw.models.Submission(reddit,url = Link)
@@ -1153,12 +1107,35 @@ async def InitAction(Link, reddit, SenderAction):
                         submission.mod.remove()
                     msgRetu = [Message(False,False,MessageType.Text,f"El usuario elimino su cuenta, no se sancionara al usuario pero el contenido sera eliminado")]
                 else:
-                    row = (AuthorName, SanatizeRedditLink(Link), SenderAction.Id,datetime.now() )
+                    RUid = await GetRedditUID(AuthorName)
+                    row = (SanatizeRedditLink(Link), SenderAction.Id,datetime.now(),RUid)
                     msgRetu = GetWarns(AuthorName, True)
-                    DB.WriteDB("""INSERT INTO Actions (User, Link, Mod, Date) VALUES (?,?,?,?);""", row)
-                    msgRetu.append(Message(False,False,MessageType.Text,f"Selecciona un motivo #<Id>, <Descripcion (Opcional)> \n{GetActionTypes(AuthorName)}\nUndo - Deshacer warn."))
+                    DB.WriteDB("""INSERT INTO Actions (Link, Mod, Date, RedditUserId) VALUES (?,?,?,?);""", row)
+                    msgRetu.append(Message(False,False,MessageType.Text,f"Selecciona un motivo !<Id>, <Descripcion (Opcional)> \n{GetActionTypes(AuthorName)}\nUndo - Deshacer warn."))
                 return msgRetu
         return []
     except:
         return [Message(False,False,MessageType.Text,f"Error al intentar iniciar la accion: {sys.exc_info()[1]}")]
+async def GetRedditUID(sName):
+    UID = DB.GetDBValue(f"Select Id from RedditUsers where RedditName = '{sName}'")
+    if UID is None:
+        oUser = await reddit.redditor(sName)
+        try:
+            await oUser.load()
+            mDeleted = False
+            if hasattr(oUser, 'created_utc') and oUser.created_utc is not None:
+                sTime = datetime.fromtimestamp(oUser.created_utc).strftime('%Y-%m-%d')
+            else:
+                sTime = None
+            if hasattr(oUser, 'is_suspended') and oUser.is_suspended:
+                mActive = 0
+            else:
+                mActive = sTime != None
+            DB.WriteDB("Insert into RedditUsers (RedditName, CakeDay, Active) values(?,?,?)",(oUser.name, sTime, mActive))
+        except:
+            DB.WriteDB("Insert into RedditUsers (RedditName, CakeDay, Active) values(?,?,?)",(sName, None, 0))
+            #deleted account
+        return DB.GetDBValue(f"Select Id from RedditUsers where RedditName = '{sName}'")
+    else:
+        return UID
 client.run(TOKEN)

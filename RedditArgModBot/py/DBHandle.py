@@ -30,7 +30,16 @@ class DBHandle(object):
             return values[0][0]
         return None
     def GetSetting(self, setting, ModId = 0):
-        return self.GetDBValue(f"SELECT [Value] FROM Settings where [Key] = '{setting}'")
+        values = self.ExecuteDB(f"Select [Value] FROM Settings where [Key] = '{setting}'")
+        if len(values) == 1:
+            return values[0][0]
+        elif len(values) == 0:
+            return None
+        return [row[0].lower() for row in values]
+        #sType = self.GetDBValue(f"SELECT [DataType] FROM Settings where [Key] = '{setting}'")
+        #if sType == 'Array':
+        #    return self.ExecuteDB("Select [Value] FROM Settings where [Key] = '{setting}'")
+        #return self.GetDBValue(f"SELECT [Value] FROM Settings where [Key] = '{setting}'")
     def GetTable(self, sQuery):
         DB = self.openDB();
         cur = DB.cursor()

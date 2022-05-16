@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Reddit Mod Bot</title>
+    <link rel="stylesheet" href="/css/NicoStyle.css" type="text/css">
+</head>
+
+<body class="index">
+    <div id="header">
+        <h1>Reddit Mod Bot</h1>
+    </div>
+
+
+    <form action="logoff" method="post">
+        <p>
+            Welcome {{username}}
+            <button type="submit" value="logoff">Log off</button>
+        </p>
+    </form>
+
+
+    <div class="div-table">
+        {% for process in listProcess %}
+        {% block process %}
+        <div class="div-table-row">
+            <div class="div-table-col">{{ escape(process.Name.rstrip('PID'))}}<span class="dot {{escape(process.cssClass())}}"></span></div>
+        </div>
+        {% end %}
+        {% end %}
+    </div>
+
+
+    <p><a href="logs">View logs</a></p>
+    <div id="footer">
+        <hr>
+    </div>
+
+</body>
+
+</html>

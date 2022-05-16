@@ -1,5 +1,6 @@
 import discord
 import asyncio
+from py.StaticHelpers import *
 class MessageType:
     Text = 1
     Image = 2
@@ -7,53 +8,51 @@ class Recipient:
     Channel = 1
     User = 2
 class Message:
-    def __init__(self,Embed, NoDel, Type, Content, To = Recipient.Channel):
+    def __init__(self,Embed, NoDel, Type, Content, To = None):
         self.Embed = Embed
         self.NoDel = NoDel
         self.Type = Type
         self.Content = Content
         self.To = To
 
-async def HandleMessage(DiscordMaxChars, DB, message, Response):
+async def HandleMessage(DiscordMaxChars, DB, destination, Response):
     Msgs = []
     bEmbed = False
-    if Response.Type == MessageType.Text:
-        for indRes in Sectionize(DiscordMaxChars, Response.Content, "--------------------", True):
-            if Response.Embed:
-                embMsg = discord.Embed()
-                embMsg.description = indRes
-                sentMsg = await message.channel.send(embed=embMsg)
-            else:
-                sentMsg = await message.channel.send(indRes)
+    try:
+        if Response.Type == MessageType.Text:
+            Response.Content = Response.Content.replace("_","\_")
+            for indRes in Sectionize(DiscordMaxChars, Response.Content, "--------------------", True):
+                if Response.Embed:
+                    embMsg = discord.Embed()
+                    embMsg.description = indRes
+                    sentMsg = await destination.send(embed=embMsg)
+                else:
+                    sentMsg = await destination.send(indRes)
+                Msgs.append(sentMsg)
+        elif Response.Type == MessageType.Image:
+            sentMsg = await destination.send(file=discord.File(Response.Content))
             Msgs.append(sentMsg)
-    elif Response.Type == MessageType.Image:
-        sentMsg = await message.channel.send(file=discord.File(Response.Content))
-        Msgs.append(sentMsg)
-    seconds = int(DB.GetSetting("DelMsgAfterSeconds"))
-    if seconds > 0 and not Response.NoDel:
-        await asyncio.sleep(seconds)
-        for Msg in Msgs:
-            await Msg.delete()
-async def HandleDirectMessage(DiscordMaxChars, DB, client, user, Response):
-    Msgs = []
-    bEmbed = False
-    if Response.Type == MessageType.Text:
-        for indRes in Sectionize(DiscordMaxChars, Response.Content, "--------------------", True):
-            if Response.Embed:
-                embMsg = discord.Embed()
-                embMsg.description = indRes
-                sentMsg = await user.send(user, embed=embMsg)
-            else:
-                sentMsg = await user.send(user, indRes)
-            Msgs.append(sentMsg)
-    elif Response.Type == MessageType.Image:
-        sentMsg = await user.send(user, file=discord.File(Response.Content))
-        Msgs.append(sentMsg)
-    seconds = int(DB.GetSetting("DelMsgAfterSeconds"))
-    if seconds > 0 and not Response.NoDel:
-        await asyncio.sleep(seconds)
-        for Msg in Msgs:
-            await Msg.delete()
+        seconds = int(DB.GetSetting("DelMsgAfterSeconds"))
+        if seconds > 0 and not Response.NoDel:
+            await asyncio.sleep(seconds)
+            for Msg in Msgs:
+                await Msg.delete()
+    except Exception as e:
+        if "Cannot send messages to this user" in e.args[0]:
+            DiscordServer = discord.utils.get(destination.mutual_guilds,name="r/Argentina")
+            category = discord.utils.get(DiscordServer.categories, name = "DMs")
+            if category is not None:
+                channel = discord.utils.get(category.channels, name=destination.name.lower())
+                bot_role = discord.utils.get(DiscordServer.roles, name="Robo-Tina")
+                if channel is None:
+                    overwrites = {DiscordServer.default_role: discord.PermissionOverwrite(read_messages=False),destination: discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True),bot_role: discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True)}
+                    channel = await DiscordServer.create_text_channel(category=category, name = destination.name.lower(), overwrites=overwrites)
+                    await channel.send(f"<@{destination.id}>")
+                try:
+                    await HandleMessage(DiscordMaxChars, DB, channel, Response)
+                except Exception as f:
+                    Log(f,bcolors.FAIL,logging.ERROR)
+            Log(e,bcolors.FAIL,logging.ERROR)
 def CutStringInPieces(chunk, Max, retChunks):
     while len(chunk) > Max:
         retChunks.append(chunk[:Max])
@@ -72,7 +71,7 @@ def Sectionize(Max, sIn, sSplit, UseNewLinesForChunks):
             else:
                 sSeparator = sSplit
             if len(sRet + chunk + sSeparator) > Max:
-                if len(sRet) == 0: #this chunk is larger than the limit by itself, cut it in pieces 
+                if len(sRet) == 0 or len(chunk + sSeparator) > Max: #this chunk is larger than the limit by itself, cut it in pieces 
                     if UseNewLinesForChunks:
                         spaceChunks = Sectionize(Max,chunk,"\n",False)
                         for spaceChunk in spaceChunks:

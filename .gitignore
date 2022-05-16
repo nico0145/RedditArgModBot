@@ -362,3 +362,8 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /RedditArgModBot/AutomodLog.txt
+/RedditArgModBot/ploty.png
+/RedditArgModBot/plotp.png
+/RedditArgModBot/plotm.png
+/RedditArgModBot/ploth.png
+/RedditArgModBot/plot.png

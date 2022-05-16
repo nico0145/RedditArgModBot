@@ -4,13 +4,14 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>9c323392-f301-4694-ba7e-8c45cfaa00b5</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>bot.py</StartupFile>
+    <StartupFile>py\controllers.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
     <Name>RedditArgModBot</Name>
     <RootNamespace>RedditArgModBot</RootNamespace>
+    <PublishUrl>C:\Users\Nicolas\Desktop\Startup\DB</PublishUrl>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>
@@ -21,27 +22,54 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="AutoMod.py">
+    <Compile Include="py\AutoMod.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="bot.py">
+    <Compile Include="py\bot.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="DBHandle.py">
+    <Compile Include="py\DBHandle.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="DiscordHandle.py">
+    <Compile Include="py\DiscordHandle.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="DiscordModBot.py">
+    <Compile Include="py\DiscordModBot.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="StaticHelpers.py">
+    <Compile Include="py\StaticHelpers.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="py\controllers.py">
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>
   <ItemGroup>
     <Content Include="DBScript.sql" />
+    <Content Include="resources\index.html">
+      <Publish>True</Publish>
+    </Content>
+    <Content Include="resources\logoff.html">
+      <Publish>True</Publish>
+    </Content>
+    <Content Include="resources\logs.html">
+      <Publish>True</Publish>
+    </Content>
+    <Content Include="resources\static\css\NicoStyle.css">
+      <Publish>True</Publish>
+    </Content>
+    <Content Include="resources\submit.html">
+      <Publish>True</Publish>
+    </Content>
+    <Content Include="resources\unauthorized.html">
+      <Publish>True</Publish>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="resources\" />
+    <Folder Include="py\" />
+    <Folder Include="resources\static\" />
+    <Folder Include="resources\static\css\" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
